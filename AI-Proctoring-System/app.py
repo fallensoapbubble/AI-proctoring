@@ -184,39 +184,48 @@ def handle_detection_event(event):
             
             current_sessions[session_id]['detections'].append(detection_data)
             
-            # Save detection to persistent storage
+            # Save detection to persistent storage (only for real frame data)
             if hasattr(event, 'frame_data') and event.frame_data is not None:
-                # Clean up detection type - remove enum prefix and make it simple
-                raw_type = str(event.event_type)
-                print(f"🔍 Event detection type: {raw_type}")
-                
-                # Clean the type name properly
-                if 'DetectionType.' in raw_type:
-                    clean_type = raw_type.replace('DetectionType.', '').lower()
+                # Check if frame_data looks like real JPEG data (starts with JPEG magic bytes)
+                if isinstance(event.frame_data, bytes) and len(event.frame_data) > 4:
+                    # Check for JPEG magic bytes (FF D8 FF)
+                    if event.frame_data[:3] == b'\xff\xd8\xff':
+                        # Clean up detection type - remove enum prefix and make it simple
+                        raw_type = str(event.event_type)
+                        print(f"🔍 Event detection type: {raw_type}")
+                        
+                        # Clean the type name properly
+                        if 'DetectionType.' in raw_type:
+                            clean_type = raw_type.replace('DetectionType.', '').lower()
+                        else:
+                            clean_type = raw_type.lower()
+                        
+                        # Remove any existing timestamps from the type name
+                        import re
+                        clean_type = re.sub(r'_\d{8}_\d{6}.*', '', clean_type)
+                        
+                        # Map to simple names
+                        type_mapping = {
+                            'gaze_away': 'gaze',
+                            'mobile_detected': 'mobile',
+                            'multiple_people': 'people',
+                            'face_not_visible': 'face',
+                            'lip_movement': 'lips'
+                        }
+                        
+                        detection_type = type_mapping.get(clean_type, clean_type)
+                        print(f"🔍 Cleaned event detection type: {detection_type}")
+                        
+                        session_manager.save_screenshot(
+                            session_id, 
+                            event.frame_data, 
+                            detection_type
+                        )
+                        print(f"📸 Saved real screenshot for {detection_type} detection")
+                    else:
+                        print(f"⚠️ Skipping screenshot save - frame_data doesn't contain valid JPEG data")
                 else:
-                    clean_type = raw_type.lower()
-                
-                # Remove any existing timestamps from the type name
-                import re
-                clean_type = re.sub(r'_\d{8}_\d{6}.*', '', clean_type)
-                
-                # Map to simple names
-                type_mapping = {
-                    'gaze_away': 'gaze',
-                    'mobile_detected': 'mobile',
-                    'multiple_people': 'people',
-                    'face_not_visible': 'face',
-                    'lip_movement': 'lips'
-                }
-                
-                detection_type = type_mapping.get(clean_type, clean_type)
-                print(f"🔍 Cleaned event detection type: {detection_type}")
-                
-                session_manager.save_screenshot(
-                    session_id, 
-                    event.frame_data, 
-                    detection_type
-                )
+                    print(f"⚠️ Skipping screenshot save - invalid frame_data format")
             
             print(f"🚨 Detection event handled: {detection_data['type']} (confidence: {detection_data['confidence']:.2f})")
             
@@ -329,19 +338,6 @@ def process_frame():
                 
                 # Run individual detectors manually to ensure they work
                 detections_found = []
-                
-                # Add some test detections for demonstration (remove in production)
-                import random
-                if random.random() < 0.1:  # 10% chance of fake detection for testing
-                    fake_detections = ['GAZE_AWAY', 'MOBILE_DETECTED', 'FACE_NOT_VISIBLE']
-                    fake_type = random.choice(fake_detections)
-                    detections_found.append({
-                        'type': fake_type,
-                        'confidence': 0.8 + random.random() * 0.2,
-                        'timestamp': datetime.now().isoformat(),
-                        'source': 'test_detector'
-                    })
-                    print(f"🧪 Test detection triggered: {fake_type}")
                 
                 # Test gaze detection
                 gaze_detector = detector_manager.detectors.get('gaze')
@@ -537,13 +533,8 @@ def submit_exam():
                     if detection.get('confidence', 0) > 0.7:
                         detection_summary['high_confidence_detections'] += 1
                 
-                # Save detection summary as JSON (use a simple detection type)
-                import json
-                session_manager.save_screenshot(
-                    session_id, 
-                    json.dumps(detection_summary, indent=2).encode(), 
-                    "summary"
-                )
+                # Save detection summary as JSON file
+                session_manager.save_detection_summary(session_id, detection_summary)
             
             # Finalize session in persistent storage
             file_counts = session_manager.finalize_session(session_id)

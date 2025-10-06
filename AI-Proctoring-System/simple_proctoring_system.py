@@ -66,6 +66,7 @@ class UUIDSessionManager:
         (session_dir / "screenshots").mkdir(exist_ok=True)
         (session_dir / "audio").mkdir(exist_ok=True)
         (session_dir / "answers").mkdir(exist_ok=True)
+        (session_dir / "metadata").mkdir(exist_ok=True)
         
         # Create session metadata
         metadata = {
@@ -108,6 +109,27 @@ class UUIDSessionManager:
         
         self._update_metadata(session_id, "screenshots", 1)
         print(f"Saved screenshot: {filename}")
+        return str(filepath)
+    
+    def save_detection_summary(self, session_id: str, summary_data: dict) -> str:
+        """Save detection summary as JSON file."""
+        session_dir = self.base_dir / session_id
+        if not session_dir.exists():
+            raise ValueError(f"Session {session_id} not found")
+        
+        # Create metadata directory if it doesn't exist
+        metadata_dir = session_dir / "metadata"
+        metadata_dir.mkdir(exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        filename = f"detection_summary_{timestamp}.json"
+        filepath = metadata_dir / filename
+        
+        # Save summary data as JSON
+        with open(filepath, 'w') as f:
+            json.dump(summary_data, f, indent=2)
+        
+        print(f"Saved detection summary: {filename}")
         return str(filepath)
     
     def save_audio(self, session_id: str, audio_data: bytes, audio_type: str) -> str:
@@ -208,6 +230,7 @@ class UUIDSessionManager:
             "screenshots": len(list((session_dir / "screenshots").glob("*"))),
             "audio": len(list((session_dir / "audio").glob("*"))),
             "answers": len(list((session_dir / "answers").glob("*"))),
+            "metadata": len(list((session_dir / "metadata").glob("*"))),
             "detections": len(list(session_dir.glob("detection_*.json"))),
             "total": len(list(session_dir.rglob("*"))) - len(list(session_dir.glob("*/")))
         }
@@ -280,49 +303,11 @@ class UUIDSessionManager:
         return sorted(sessions)
 
 
-class SimpleDetectionSimulator:
-    """Simulates detection events for testing."""
-    
-    def __init__(self):
-        """Initialize the detection simulator."""
-        self.detection_types = [
-            "face_not_visible",
-            "multiple_faces",
-            "looking_away",
-            "mobile_device",
-            "audio_anomaly",
-            "suspicious_movement",
-            "unauthorized_object"
-        ]
-        
-        self.descriptions = {
-            "face_not_visible": "Student's face is not clearly visible",
-            "multiple_faces": "Multiple faces detected in frame",
-            "looking_away": "Student looking away from screen",
-            "mobile_device": "Mobile device detected in frame",
-            "audio_anomaly": "Unusual audio pattern detected",
-            "suspicious_movement": "Suspicious movement detected",
-            "unauthorized_object": "Unauthorized object detected"
-        }
-        
-        print("SimpleDetectionSimulator initialized")
-    
-    def simulate_detection(self) -> Dict[str, Any]:
-        """Simulate a detection event."""
-        detection_type = random.choice(self.detection_types)
-        confidence = random.uniform(0.3, 0.95)
-        
-        return {
-            "type": detection_type,
-            "confidence": confidence,
-            "description": self.descriptions.get(detection_type, "Unknown detection"),
-            "timestamp": datetime.now().isoformat(),
-            "severity": "high" if confidence > 0.8 else "medium" if confidence > 0.6 else "low"
-        }
+# Removed SimpleDetectionSimulator - no longer needed for production
 
 
 if __name__ == "__main__":
-    print("🚀 Simple Proctoring System Test")
+    print("🚀 Simple Proctoring System")
     print("=" * 40)
     
     # Test session manager
@@ -332,26 +317,8 @@ if __name__ == "__main__":
     session_id = manager.create_session()
     print(f"Created session: {session_id}")
     
-    # Test detection simulator
-    simulator = SimpleDetectionSimulator()
-    
-    # Simulate some activity
-    for i in range(3):
-        # Save an answer
-        manager.save_answer(session_id, i+1, f"Answer {i+1}", f"Question {i+1}?")
-        
-        # Simulate detection
-        detection = simulator.simulate_detection()
-        manager.save_detection(session_id, detection)
-        
-        # Save screenshot if high confidence
-        if detection['confidence'] > 0.7:
-            fake_image = f"fake_screenshot_data_{i}".encode() * 50
-            manager.save_screenshot(session_id, fake_image, detection['type'])
-    
-    # Save audio
-    fake_audio = b"fake_audio_data" * 100
-    manager.save_audio(session_id, fake_audio, "exam_recording")
+    # Test basic functionality
+    manager.save_answer(session_id, 1, "Test Answer", "Test Question?")
     
     # Finalize session
     file_counts = manager.finalize_session(session_id)
