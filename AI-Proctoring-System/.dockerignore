@@ -1,0 +1,137 @@
+# Git and version control
+.git/
+.gitignore
+.gitattributes
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyc
+*.pyo
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-*
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Documentation (exclude most, keep essential)
+*.md
+docs/
+!README.md
+!DOCKER_OPTIMIZATION_README.md
+
+# Test files and coverage
+tests/
+test_*.py
+*_test.py
+.coverage
+.pytest_cache/
+htmlcov/
+.tox/
+.hypothesis/
+test-system.py
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Logs and evidence (mounted as volumes)
+logs/
+evidence/
+cheating_evidence/
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Development files
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Node modules
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Jupyter notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# Large model files (keep existing ones, exclude downloads)
+models/*.pt
+models/*.pth
+models/*.onnx
+!models/yolov8n.pt
+!models/yolov5s.pt
+!models/yolov8s.pt
+
+# Large data files
+data/
+datasets/
+
+# Development and build scripts
+build-docker.sh
+build-optimized.sh
+run-optimized.sh
+build-fast.sh
+*.log
+
+# Unnecessary Python cache
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.Python
+
+# Remove test files from Docker context
+test-system.py
+**/test_*.py
+**/*_test.py
+
+# Docker files (exclude from build context)
+Dockerfile.*
+docker-compose.override.yml
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Coverage reports
+coverage.xml
+*.cover
+.coverage.*
+
+# Profiling data
+.prof

@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  proctoring-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ai-proctoring-fixed:latest
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=development
+      - DEPLOYMENT_MODE=docker
+      - PYTHONPATH=/app
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-dev-secret-key-change-in-production}
+      - OPENCV_LOG_LEVEL=ERROR
+      - TORCH_HOME=/app/models
+      - PYTHONUNBUFFERED=1
+      # Performance optimizations
+      - OMP_NUM_THREADS=2
+      - MKL_NUM_THREADS=2
+      - NUMEXPR_MAX_THREADS=2
+    volumes:
+      # Use named volumes to avoid permission issues
+      - proctoring-evidence:/app/evidence
+      - proctoring-sessions:/app/sessions
+      - proctoring-config:/app/config
+      - proctoring-logs:/app/logs
+      - proctoring-models:/app/models
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - proctoring-network
+    # Resource limits optimized for ML workloads
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+    # Shared memory for ML operations
+    shm_size: 256m
+
+volumes:
+  proctoring-models:
+    driver: local
+  proctoring-evidence:
+    driver: local
+  proctoring-sessions:
+    driver: local
+  proctoring-config:
+    driver: local
+  proctoring-logs:
+    driver: local
+
+networks:
+  proctoring-network:
+    driver: bridge

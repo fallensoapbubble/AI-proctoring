@@ -1,0 +1,347 @@
+{% extends "layout.html" %}
+
+{% block head %}
+<style>
+    .results-container {
+        max-width: 600px;
+        margin: 50px auto;
+        text-align: center;
+    }
+    .score-display {
+        font-size: 3rem;
+        font-weight: bold;
+        margin: 30px 0;
+    }
+    .score-excellent {
+        color: #28a745;
+    }
+    .score-good {
+        color: #17a2b8;
+    }
+    .score-fair {
+        color: #ffc107;
+    }
+    .score-poor {
+        color: #dc3545;
+    }
+    .session-info {
+        background: #f8f9fa;
+        padding: 20px;
+        border-radius: 8px;
+        margin: 20px 0;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="results-container">
+    <div class="card">
+        <div class="card-header bg-success text-white">
+            <h2 class="card-title h4 mb-0">🎉 Exam Completed!</h2>
+        </div>
+        <div class="card-body">
+            <h3>Your Results</h3>
+            
+            {% set percentage = (score / total * 100) | round(1) %}
+            <div class="score-display 
+                {% if percentage >= 90 %}score-excellent
+                {% elif percentage >= 75 %}score-good
+                {% elif percentage >= 60 %}score-fair
+                {% else %}score-poor{% endif %}">
+                {{ score }} / {{ total }}
+                <div style="font-size: 1.5rem;">{{ percentage }}%</div>
+            </div>
+            
+            <div class="session-info">
+                <h5>Session Information</h5>
+                <p><strong>Session ID:</strong> {{ session.get('session_id', 'Unknown') }}</p>
+                <p><strong>Student:</strong> {{ session.get('student_name', 'Unknown') }}</p>
+                <p><strong>Student ID:</strong> {{ session.get('student_id', 'Unknown') }}</p>
+                <p><strong>Start Time:</strong> {{ session_data.get('start_time', 'Unknown') }}</p>
+                <p><strong>End Time:</strong> {{ session_data.get('end_time', 'Unknown') }}</p>
+                <p><strong>Status:</strong> {{ session_data.get('status', 'Unknown') }}</p>
+            </div>
+            
+            <!-- Detection Summary -->
+            {% if session_data.get('detections') %}
+            <div class="alert alert-warning">
+                <h6><strong>⚠️ Proctoring Summary:</strong></h6>
+                <p><strong>Total Detections:</strong> {{ session_data.detections|length }}</p>
+                {% set detection_types = session_data.detections|map(attribute='type')|list %}
+                {% for detection_type in detection_types|unique %}
+                <p><strong>{{ detection_type }}:</strong> {{ detection_types|select('equalto', detection_type)|list|length }} times</p>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="alert alert-success">
+                <strong>✅ Clean Session:</strong> No suspicious activity detected during the exam.
+            </div>
+            {% endif %}
+            
+            <!-- File Summary -->
+            {% if file_counts %}
+            <div class="session-info">
+                <h6>Session Files Generated:</h6>
+                <div class="row">
+                    <div class="col-md-4">
+                        <p><strong>Screenshots:</strong> {{ file_counts.get('screenshots', 0) }}</p>
+                    </div>
+                    <div class="col-md-4">
+                        <p><strong>Audio Files:</strong> {{ file_counts.get('audio', 0) }}</p>
+                    </div>
+                    <div class="col-md-4">
+                        <p><strong>Answers:</strong> {{ file_counts.get('answers', 0) }}</p>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+            
+            <!-- Detection Details -->
+            {% if session_data.get('detections') %}
+            <div class="mt-4">
+                <h6>Detection Timeline:</h6>
+                <div class="list-group" style="max-height: 300px; overflow-y: auto;">
+                    {% for detection in session_data.detections[-10:] %}
+                    <div class="list-group-item">
+                        <div class="d-flex w-100 justify-content-between">
+                            <h6 class="mb-1">{{ detection.type }}</h6>
+                            <small>{{ detection.timestamp }}</small>
+                        </div>
+                        <p class="mb-1">Confidence: {{ "%.1f"|format(detection.confidence * 100) }}%</p>
+                        <small>Source: {{ detection.source }}</small>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% if session_data.detections|length > 10 %}
+                <small class="text-muted">Showing last 10 detections ({{ session_data.detections|length }} total)</small>
+                {% endif %}
+            </div>
+            {% endif %}
+            
+            <!-- Session Files Display -->
+            <div class="mt-4" id="session-files">
+                <h6>Session Evidence:</h6>
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <h6 class="mb-0">📸 Screenshots</h6>
+                            </div>
+                            <div class="card-body" id="screenshots-container">
+                                <p class="text-muted">Loading screenshots...</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <h6 class="mb-0">🎵 Audio Files</h6>
+                            </div>
+                            <div class="card-body" id="audio-container">
+                                <p class="text-muted">Loading audio files...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="alert alert-info mt-4">
+                <strong>Note:</strong> Your exam session has been recorded and will be reviewed. 
+                All session data including screenshots, audio recordings, and detection events have been saved for verification purposes.
+            </div>
+            
+            <div class="mt-4">
+                <a href="/" class="btn btn-primary">Return to Home</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+<script>
+    // Load session files when page loads
+    document.addEventListener('DOMContentLoaded', function() {
+        const sessionId = '{{ session_data.get("session_id", "") }}';
+        console.log('Session ID from template:', sessionId);
+        
+        if (sessionId && sessionId !== '') {
+            console.log('Loading session files for:', sessionId);
+            loadSessionFiles(sessionId);
+        } else {
+            console.error('No session ID found');
+            document.getElementById('screenshots-container').innerHTML = '<p class="text-danger">No session ID available</p>';
+            document.getElementById('audio-container').innerHTML = '<p class="text-danger">No session ID available</p>';
+        }
+    });
+    
+    async function loadSessionFiles(sessionId) {
+        try {
+            console.log('Fetching session files for:', sessionId);
+            const response = await fetch(`/api/session_files/${sessionId}`);
+            console.log('Response status:', response.status);
+            console.log('Response headers:', response.headers);
+            
+            const files = await response.json();
+            console.log('Session files response:', files);
+            
+            if (response.ok) {
+                console.log('Screenshots found:', files.screenshots.length);
+                console.log('Audio files found:', files.audio.length);
+                
+                // Log each screenshot URL for debugging
+                files.screenshots.forEach((screenshot, index) => {
+                    console.log(`Screenshot ${index + 1}: ${screenshot.filename} -> ${screenshot.url}`);
+                });
+                
+                displayScreenshots(files.screenshots);
+                displayAudioFiles(files.audio);
+            } else {
+                console.error('Error loading session files:', files.error);
+                document.getElementById('screenshots-container').innerHTML = `<p class="text-danger">Error: ${files.error}</p>`;
+                document.getElementById('audio-container').innerHTML = `<p class="text-danger">Error: ${files.error}</p>`;
+            }
+        } catch (err) {
+            console.error('Error loading session files:', err);
+            document.getElementById('screenshots-container').innerHTML = `<p class="text-danger">Network error: ${err.message}</p>`;
+            document.getElementById('audio-container').innerHTML = `<p class="text-danger">Network error: ${err.message}</p>`;
+        }
+    }
+    
+    function displayScreenshots(screenshots) {
+        const container = document.getElementById('screenshots-container');
+        console.log('Displaying screenshots:', screenshots);
+        
+        if (!screenshots || screenshots.length === 0) {
+            container.innerHTML = '<p class="text-muted">No screenshots captured</p>';
+            return;
+        }
+        
+        let html = `<p class="small text-muted">${screenshots.length} screenshot(s) captured</p>`;
+        html += '<div class="row">';
+        
+        screenshots.slice(0, 6).forEach((screenshot, index) => {
+            const sizeKB = Math.round(screenshot.size / 1024);
+            console.log(`Screenshot ${index + 1}:`, screenshot.url);
+            html += `
+                <div class="col-md-4 mb-2">
+                    <div class="card">
+                        <img src="${screenshot.url}" class="card-img-top" style="height: 100px; object-fit: cover;" 
+                             alt="Screenshot ${index + 1}" onclick="showImageModal('${screenshot.url}', '${screenshot.filename}')"
+                             onerror="handleImageError(this, '${screenshot.filename}')">
+                        <div class="card-body p-2">
+                            <small class="text-muted">${screenshot.filename}</small><br>
+                            <small class="text-muted">${sizeKB} KB</small>
+                        </div>
+                    </div>
+                </div>
+            `;
+        });
+        
+        html += '</div>';
+        
+        if (screenshots.length > 6) {
+            html += `<p class="small text-muted">Showing 6 of ${screenshots.length} screenshots</p>`;
+        }
+        
+        console.log('Setting screenshots HTML:', html);
+        container.innerHTML = html;
+    }
+    
+    function displayAudioFiles(audioFiles) {
+        const container = document.getElementById('audio-container');
+        
+        if (audioFiles.length === 0) {
+            container.innerHTML = '<p class="text-muted">No audio files recorded</p>';
+            return;
+        }
+        
+        let html = `<p class="small text-muted">${audioFiles.length} audio file(s) recorded</p>`;
+        
+        audioFiles.slice(0, 3).forEach((audioFile, index) => {
+            const sizeKB = Math.round(audioFile.size / 1024);
+            html += `
+                <div class="mb-2">
+                    <div class="card">
+                        <div class="card-body p-2">
+                            <h6 class="card-title small">${audioFile.filename}</h6>
+                            <audio controls class="w-100" style="height: 30px;">
+                                <source src="${audioFile.url}" type="audio/wav">
+                                Your browser does not support the audio element.
+                            </audio>
+                            <small class="text-muted">${sizeKB} KB</small>
+                        </div>
+                    </div>
+                </div>
+            `;
+        });
+        
+        if (audioFiles.length > 3) {
+            html += `<p class="small text-muted">Showing 3 of ${audioFiles.length} audio files</p>`;
+        }
+        
+        container.innerHTML = html;
+    }
+    
+    function handleImageError(img, filename) {
+        console.error('Failed to load image:', img.src, 'for file:', filename);
+        
+        // Replace with error placeholder
+        img.style.backgroundColor = '#f8f9fa';
+        img.style.border = '2px dashed #dee2e6';
+        img.style.display = 'flex';
+        img.style.alignItems = 'center';
+        img.style.justifyContent = 'center';
+        img.alt = 'Image failed to load';
+        img.title = `Failed to load: ${filename}`;
+        
+        // Try to show error text (this won't work for img tags, but helps with debugging)
+        img.onerror = null; // Prevent infinite loop
+        
+        // Replace the image with a div showing error
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'card-img-top d-flex align-items-center justify-content-center';
+        errorDiv.style.height = '100px';
+        errorDiv.style.backgroundColor = '#f8f9fa';
+        errorDiv.style.border = '2px dashed #dee2e6';
+        errorDiv.style.color = '#6c757d';
+        errorDiv.innerHTML = '<small>Image failed to load</small>';
+        
+        img.parentNode.replaceChild(errorDiv, img);
+    }
+    
+    function showImageModal(imageUrl, filename) {
+        // Create modal for full-size image viewing
+        const modal = document.createElement('div');
+        modal.className = 'modal fade';
+        modal.innerHTML = `
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">${filename}</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body text-center">
+                        <img src="${imageUrl}" class="img-fluid" alt="${filename}" 
+                             onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+                        <div style="display:none; padding: 50px; color: #6c757d;">
+                            <p>Failed to load image: ${filename}</p>
+                            <small>URL: ${imageUrl}</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        const bootstrapModal = new bootstrap.Modal(modal);
+        bootstrapModal.show();
+        
+        // Remove modal from DOM when hidden
+        modal.addEventListener('hidden.bs.modal', function() {
+            document.body.removeChild(modal);
+        });
+    }
+</script>
+{% endblock %}

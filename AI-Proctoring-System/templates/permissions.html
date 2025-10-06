@@ -1,0 +1,480 @@
+{% extends "layout.html" %}
+
+{% block head %}
+<style>
+    .permission-test {
+        border: 2px solid #ddd;
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 20px;
+    }
+    .permission-test.success {
+        border-color: #28a745;
+        background-color: #d4edda;
+    }
+    .permission-test.error {
+        border-color: #dc3545;
+        background-color: #f8d7da;
+    }
+    .status-indicator {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        margin-right: 8px;
+    }
+    .status-success {
+        background-color: #28a745;
+    }
+    .status-error {
+        background-color: #dc3545;
+    }
+    .status-pending {
+        background-color: #ffc107;
+    }
+    .modal {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0,0,0,0.5);
+        z-index: 1050;
+    }
+    .modal-dialog {
+        position: relative;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 90%;
+        max-width: 500px;
+    }
+    .modal-content {
+        background: white;
+        border-radius: 8px;
+        padding: 0;
+    }
+    .modal-header {
+        padding: 15px 20px;
+        border-bottom: 1px solid #dee2e6;
+    }
+    .modal-body {
+        padding: 20px;
+    }
+    .modal-footer {
+        padding: 15px 20px;
+        border-top: 1px solid #dee2e6;
+        text-align: right;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-10">
+        <!-- System Information Panel -->
+        <div class="card mb-3">
+            <div class="card-header bg-info text-white">
+                <h5 class="mb-0">🔍 System Diagnostics</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>Browser Information:</h6>
+                        <ul class="list-unstyled" id="browser-info">
+                            <li>Loading...</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>Available Devices:</h6>
+                        <ul class="list-unstyled" id="device-info">
+                            <li>Scanning...</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <h6>Debug Console:</h6>
+                    <div id="debug-console" style="background: #f8f9fa; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 12px; max-height: 150px; overflow-y: auto;">
+                        <div>System diagnostics starting...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Permission Tests -->
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h2 class="card-title h5 mb-0">Camera and Microphone Permissions</h2>
+            </div>
+            <div class="card-body">
+                <p>Please allow access to your camera to proceed with the exam. Microphone access is optional but recommended for full monitoring capabilities.</p>
+                
+                <div class="permission-test" id="camera-test">
+                    <h5><span class="status-indicator status-pending" id="camera-status"></span>Camera Permission Test</h5>
+                    <p>Testing camera permissions (camera will be activated during the exam):</p>
+                    <div id="test-video" style="width: 100%; max-width: 400px; height: 300px; background: linear-gradient(45deg, #f8f9fa, #e9ecef); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #6c757d; font-size: 14px; text-align: center;">
+                        <div>
+                            📹 Camera will be activated during exam
+                        </div>
+                    </div>
+                    <div class="mt-2">
+                        <small class="text-muted">Status: <span id="video-resolution">Testing permissions...</span></small>
+                    </div>
+                    <p class="mt-2 text-muted" id="camera-message">Requesting camera permissions...</p>
+                </div>
+                
+                <div class="permission-test" id="microphone-test">
+                    <h5><span class="status-indicator status-pending" id="microphone-status"></span>Microphone Test <small class="text-muted">(Optional)</small></h5>
+                    <p>Testing microphone permissions (audio monitoring is optional):</p>
+                    <div class="progress mb-2">
+                        <div class="progress-bar" id="volume-bar" role="progressbar" style="width: 0%"></div>
+                    </div>
+                    <div class="row mt-2">
+                        <div class="col-md-6">
+                            <small class="text-muted">Current Level: <span id="audio-level">0</span>%</small>
+                        </div>
+                        <div class="col-md-6">
+                            <small class="text-muted">Peak Level: <span id="audio-peak">0</span>%</small>
+                        </div>
+                    </div>
+                    <p class="text-muted" id="microphone-message">Testing microphone permissions...</p>
+                </div>
+                
+                <div class="text-center mt-4">
+                    <button class="btn btn-success" id="start-exam-btn" disabled onclick="startExam()">Start Exam</button>
+                    <button class="btn btn-secondary" id="retry-permissions-btn" onclick="testPermissions()">Retry Permissions</button>
+                </div>
+                
+                <!-- Student Information Modal -->
+                <div id="student-info-modal" class="modal" style="display: none;">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title">Student Information</h5>
+                            </div>
+                            <div class="modal-body">
+                                <form id="student-info-form">
+                                    <div class="mb-3">
+                                        <label for="student-name" class="form-label">Full Name</label>
+                                        <input type="text" class="form-control" id="student-name" required>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="student-id" class="form-label">Student ID</label>
+                                        <input type="text" class="form-control" id="student-id" required>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="student-email" class="form-label">Email</label>
+                                        <input type="email" class="form-control" id="student-email" required>
+                                    </div>
+                                </form>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" onclick="closeStudentModal()">Cancel</button>
+                                <button type="button" class="btn btn-primary" onclick="submitStudentInfo()">Start Exam</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let debugConsole = null;
+    let peakAudioLevel = 0;
+    
+    async function testPermissions() {
+        try {
+            debugLog('Starting permission tests...');
+            resetUI();
+            
+            // Check if getUserMedia is available
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                throw new Error('getUserMedia is not supported in this browser');
+            }
+            
+            // Test permissions without actually accessing the camera to avoid conflicts
+            await testPermissionsOnly();
+            
+        } catch (err) {
+            debugLog(`Permission error: ${err.name} - ${err.message}`, 'error');
+            handlePermissionError(err);
+        }
+    }
+
+    // Test permissions without actually accessing camera (to avoid conflicts with detector manager)
+    async function testPermissionsOnly() {
+        try {
+            debugLog('Testing camera permissions...');
+            
+            // Test camera permission by requesting and immediately stopping
+            const videoConstraints = { video: { width: 640, height: 480 } };
+            let testStream = await navigator.mediaDevices.getUserMedia(videoConstraints);
+            
+            debugLog('Camera permission granted', 'success');
+            
+            // Immediately stop the test stream to free up the camera
+            testStream.getTracks().forEach(track => track.stop());
+            testStream = null;
+            
+            // Mark camera as successful
+            document.getElementById('camera-status').className = 'status-indicator status-success';
+            document.getElementById('camera-test').className = 'permission-test success';
+            document.getElementById('camera-message').innerHTML = `
+                <div class="alert alert-success">
+                    <strong>Camera permission granted!</strong><br>
+                    Camera access is available and will be used during the exam.
+                </div>
+            `;
+            
+            // Now test microphone (optional)
+            await testMicrophonePermissionOnly();
+            
+        } catch (err) {
+            debugLog(`Camera permission test failed: ${err.name} - ${err.message}`, 'error');
+            throw err;
+        }
+    }
+
+    // Test microphone permission without keeping the stream
+    async function testMicrophonePermissionOnly() {
+        try {
+            debugLog('Testing microphone permission...');
+            
+            const audioConstraints = { audio: true };
+            let testStream = await navigator.mediaDevices.getUserMedia(audioConstraints);
+            
+            debugLog('Microphone permission granted', 'success');
+            
+            // Immediately stop the test stream
+            testStream.getTracks().forEach(track => track.stop());
+            testStream = null;
+            
+            // Mark microphone as successful
+            document.getElementById('microphone-status').className = 'status-indicator status-success';
+            document.getElementById('microphone-test').className = 'permission-test success';
+            document.getElementById('microphone-message').innerHTML = `
+                <div class="alert alert-success">
+                    <strong>Microphone permission granted!</strong><br>
+                    Microphone access is available for full monitoring capabilities.
+                </div>
+            `;
+            
+            checkAllPermissions();
+            
+        } catch (err) {
+            debugLog(`Microphone permission test failed (optional): ${err.name} - ${err.message}`, 'info');
+            handleMicrophoneOptionalFailure();
+        }
+    }
+
+    // Handle when microphone is optional and fails
+    function handleMicrophoneOptionalFailure() {
+        debugLog('Continuing with camera-only mode (microphone optional)', 'info');
+        
+        document.getElementById('microphone-status').className = 'status-indicator status-error';
+        document.getElementById('microphone-test').className = 'permission-test';
+        document.getElementById('microphone-message').innerHTML = `
+            <div class="alert alert-info">
+                <strong>Microphone not available</strong><br>
+                Continuing with camera-only monitoring. Audio-based detection features will be disabled.
+                <br><small>This is optional - you can still take the exam with just camera monitoring.</small>
+            </div>
+        `;
+        
+        checkAllPermissions(true);
+    }
+    
+    function resetUI() {
+        document.getElementById('camera-status').className = 'status-indicator status-pending';
+        document.getElementById('microphone-status').className = 'status-indicator status-pending';
+        document.getElementById('camera-test').className = 'permission-test';
+        document.getElementById('microphone-test').className = 'permission-test';
+        document.getElementById('camera-message').textContent = 'Requesting camera permissions...';
+        document.getElementById('microphone-message').textContent = 'Testing microphone permissions...';
+        document.getElementById('start-exam-btn').disabled = true;
+        document.getElementById('start-exam-btn').textContent = 'Start Exam';
+        document.getElementById('start-exam-btn').className = 'btn btn-success';
+    }
+    
+    function checkAllPermissions(cameraOnlyMode = false) {
+        const cameraOk = document.getElementById('camera-status').classList.contains('status-success');
+        const microphoneOk = document.getElementById('microphone-status').classList.contains('status-success');
+        
+        if (cameraOk) {
+            document.getElementById('start-exam-btn').disabled = false;
+            
+            if (microphoneOk) {
+                document.getElementById('start-exam-btn').textContent = 'Start Exam (Full Monitoring)';
+                document.getElementById('start-exam-btn').className = 'btn btn-success';
+                debugLog('Exam ready with full functionality (camera + microphone)', 'success');
+            } else {
+                document.getElementById('start-exam-btn').textContent = 'Start Exam (Camera Only)';
+                document.getElementById('start-exam-btn').className = 'btn btn-primary';
+                debugLog('Exam ready with camera-only monitoring', 'success');
+            }
+        } else {
+            document.getElementById('start-exam-btn').disabled = true;
+            document.getElementById('start-exam-btn').textContent = 'Camera Required';
+            document.getElementById('start-exam-btn').className = 'btn btn-secondary';
+            debugLog('Camera required to start exam', 'error');
+        }
+    }
+    
+    function handlePermissionError(err) {
+        let message = 'Error accessing camera: ' + err.message;
+        let troubleshooting = '';
+        
+        if (err.name === 'NotAllowedError') {
+            message = 'Permission denied. Please allow camera access.';
+            troubleshooting = `
+                <div class="alert alert-info mt-3">
+                    <h6>How to fix this:</h6>
+                    <ol>
+                        <li>Look for a camera icon in your browser's address bar</li>
+                        <li>Click it and select "Allow"</li>
+                        <li>Refresh the page or click "Retry Permissions"</li>
+                    </ol>
+                </div>
+            `;
+        } else if (err.name === 'NotFoundError') {
+            message = 'No camera found. Please check your camera connection.';
+        } else if (err.name === 'NotReadableError') {
+            message = 'Camera is already in use by another application.';
+            troubleshooting = `
+                <div class="alert alert-warning mt-3">
+                    <h6>Please:</h6>
+                    <ul>
+                        <li>Close other video applications</li>
+                        <li>Close other browser tabs using camera</li>
+                        <li>Restart your browser</li>
+                    </ul>
+                </div>
+            `;
+        }
+        
+        document.getElementById('camera-status').className = 'status-indicator status-error';
+        document.getElementById('microphone-status').className = 'status-indicator status-error';
+        document.getElementById('camera-test').className = 'permission-test error';
+        document.getElementById('microphone-test').className = 'permission-test error';
+        document.getElementById('camera-message').innerHTML = message + troubleshooting;
+        document.getElementById('microphone-message').textContent = message;
+    }
+    
+    // Start exam function
+    function startExam() {
+        debugLog('Starting exam process...', 'info');
+        document.getElementById('student-info-modal').style.display = 'block';
+    }
+    
+    // Close student modal
+    function closeStudentModal() {
+        document.getElementById('student-info-modal').style.display = 'none';
+    }
+    
+    // Submit student information and start exam
+    async function submitStudentInfo() {
+        const name = document.getElementById('student-name').value.trim();
+        const studentId = document.getElementById('student-id').value.trim();
+        const email = document.getElementById('student-email').value.trim();
+        
+        if (!name || !studentId || !email) {
+            alert('Please fill in all required fields.');
+            return;
+        }
+        
+        debugLog(`Starting exam for ${name} (${studentId})`, 'info');
+        
+        try {
+            const response = await fetch('/start_exam', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    full_name: name,
+                    student_id: studentId,
+                    email: email
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                debugLog('Exam session created successfully', 'success');
+                window.location.href = data.redirect;
+            } else {
+                debugLog(`Failed to start exam: ${data.error}`, 'error');
+                alert('Failed to start exam: ' + (data.error || 'Unknown error'));
+            }
+            
+        } catch (err) {
+            debugLog(`Error starting exam: ${err.message}`, 'error');
+            alert('Error starting exam. Please try again.');
+        }
+    }
+    
+    // Debug logging function
+    function debugLog(message, type = 'info') {
+        const timestamp = new Date().toLocaleTimeString();
+        const logEntry = document.createElement('div');
+        logEntry.style.color = type === 'error' ? '#dc3545' : type === 'success' ? '#28a745' : '#6c757d';
+        logEntry.textContent = `[${timestamp}] ${message}`;
+        
+        if (!debugConsole) {
+            debugConsole = document.getElementById('debug-console');
+        }
+        
+        debugConsole.appendChild(logEntry);
+        debugConsole.scrollTop = debugConsole.scrollHeight;
+        console.log(`[MediaDebug] ${message}`);
+    }
+
+    // System diagnostics
+    function initSystemDiagnostics() {
+        debugLog('Starting system diagnostics...');
+        
+        const browserInfo = document.getElementById('browser-info');
+        const userAgent = navigator.userAgent;
+        let browserName = 'Unknown';
+        
+        if (userAgent.includes('Chrome')) browserName = 'Chrome';
+        else if (userAgent.includes('Firefox')) browserName = 'Firefox';
+        else if (userAgent.includes('Safari')) browserName = 'Safari';
+        else if (userAgent.includes('Edge')) browserName = 'Edge';
+        
+        browserInfo.innerHTML = `
+            <li><strong>Browser:</strong> ${browserName}</li>
+            <li><strong>HTTPS:</strong> ${location.protocol === 'https:' ? 'Yes' : 'No'}</li>
+            <li><strong>MediaDevices API:</strong> ${navigator.mediaDevices ? 'Available' : 'Not Available'}</li>
+            <li><strong>getUserMedia:</strong> ${navigator.mediaDevices?.getUserMedia ? 'Available' : 'Not Available'}</li>
+        `;
+        
+        // Check devices
+        if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+            navigator.mediaDevices.enumerateDevices().then(devices => {
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                const audioDevices = devices.filter(device => device.kind === 'audioinput');
+                
+                const deviceInfo = document.getElementById('device-info');
+                deviceInfo.innerHTML = `
+                    <li><strong>Cameras:</strong> ${videoDevices.length} found</li>
+                    <li><strong>Microphones:</strong> ${audioDevices.length} found</li>
+                    <li><strong>Total Devices:</strong> ${devices.length}</li>
+                `;
+                
+                debugLog(`Found ${videoDevices.length} cameras, ${audioDevices.length} microphones`);
+            }).catch(err => {
+                debugLog(`Device enumeration failed: ${err.message}`, 'error');
+            });
+        }
+    }
+
+    // Initialize when page loads
+    document.addEventListener('DOMContentLoaded', function() {
+        initSystemDiagnostics();
+        testPermissions();
+    });
+</script>
+{% endblock %}

@@ -1,0 +1,532 @@
+{% extends "layout.html" %}
+
+{% block head %}
+<style>
+    #webcam-container {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        width: 200px;
+        height: 150px;
+        background-color: #000;
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 0 10px rgba(0,0,0,0.3);
+        z-index: 1000;
+    }
+    #webcam-feed {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        transform: scaleX(-1); /* Mirror the video */
+    }
+    #timer {
+        position: fixed;
+        top: 20px;
+        left: 20px;
+        background-color: rgba(0,0,0,0.7);
+        color: white;
+        padding: 5px 15px;
+        border-radius: 20px;
+        z-index: 1000;
+    }
+    .question-section {
+        margin-bottom: 30px;
+        padding: 20px;
+        background-color: #f8f9fa;
+        border-radius: 8px;
+    }
+    .question-title {
+        font-weight: bold;
+        margin-bottom: 15px;
+    }
+    .option-label {
+        display: block;
+        margin-bottom: 10px;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+        cursor: pointer;
+    }
+    .option-label:hover {
+        background-color: #e9ecef;
+    }
+    .option-label input {
+        margin-right: 10px;
+    }
+    .paragraph-answer {
+        min-height: 200px;
+    }
+    #cheating-alert {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background-color: rgba(220, 53, 69, 0.95);
+        color: white;
+        padding: 25px;
+        border-radius: 15px;
+        z-index: 2000;
+        display: none;
+        text-align: center;
+        box-shadow: 0 0 30px rgba(220, 53, 69, 0.5);
+        border: 3px solid #dc3545;
+        min-width: 300px;
+        font-weight: bold;
+    }
+    
+    @keyframes pulse {
+        0% { transform: translate(-50%, -50%) scale(1); }
+        50% { transform: translate(-50%, -50%) scale(1.05); }
+        100% { transform: translate(-50%, -50%) scale(1); }
+    }
+    .save-indicator {
+        font-size: 0.8rem;
+        margin-top: 5px;
+        display: none;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="timer">Time Remaining: <span id="time-display">30:00</span></div>
+
+<div id="webcam-container">
+    <video id="webcam-feed" autoplay playsinline muted></video>
+</div>
+
+<div id="cheating-alert">
+    <h3>⚠️ WARNING: Suspicious Activity Detected!</h3>
+    <p id="cheating-type">Please focus on your exam.</p>
+    <p>This incident has been recorded.</p>
+    <button class="btn btn-light" onclick="dismissCheatingAlert()">Acknowledge</button>
+</div>
+
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+                <h2 class="card-title h5 mb-0">Online Examination</h2>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-danger">
+                    <strong>Important:</strong> Your webcam and microphone are active for proctoring. Any suspicious activity will be flagged.
+                </div>
+                
+                <form id="exam-form">
+                    <h3 class="mb-4">Multiple Choice Questions</h3>
+                    
+                    {% for question in questions %}
+                    <div class="question-section" id="mcq-{{ question.id }}">
+                        <p class="question-title">{{ loop.index }}. {{ question.question }}</p>
+                        {% for option in question.options %}
+                        <label class="option-label">
+                            <input type="radio" name="mcq-{{ question.id }}" value="{{ loop.index0 }}" 
+                                data-question-id="{{ question.id }}" data-type="mcq">
+                            {{ option }}
+                        </label>
+                        {% endfor %}
+                        <div class="save-indicator text-success" id="save-mcq-{{ question.id }}">Answer saved</div>
+                    </div>
+                    {% endfor %}
+                    
+
+                    
+                    <div class="text-center mt-4">
+                        <button type="button" class="btn btn-success" id="submit-exam">Submit Exam</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Global variables
+    let stream = null;
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let remainingTime = 30 * 60; // 30 minutes in seconds
+    let timerInterval = null;
+    let proctorInterval = null;
+    
+    // Initialize webcam and audio
+    async function initializeMedia() {
+        try {
+            console.log('Initializing media...');
+            
+            // Try camera + microphone first
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: true, 
+                    audio: true 
+                });
+                console.log('Full media stream obtained (camera + microphone)');
+                setupAudioRecording();
+            } catch (audioError) {
+                console.log('Microphone failed, trying camera-only:', audioError.message);
+                
+                // Fallback to camera-only
+                stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: true 
+                });
+                console.log('Camera-only stream obtained');
+                
+                // Show camera-only notification
+                showCameraOnlyNotification();
+            }
+            
+            // Set up video feed
+            const videoElement = document.getElementById('webcam-feed');
+            videoElement.srcObject = stream;
+            
+            // Start the proctoring system
+            startProctoring();
+            
+        } catch (err) {
+            console.error('Error accessing media devices:', err);
+            alert('Failed to access camera. Camera is required for the exam. Please check your permissions and refresh the page.');
+        }
+    }
+
+    // Set up audio recording if available
+    function setupAudioRecording() {
+        try {
+            if (stream.getAudioTracks().length > 0) {
+                mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+                mediaRecorder.addEventListener('dataavailable', event => {
+                    audioChunks.push(event.data);
+                });
+                mediaRecorder.start(1000); // Collect audio in 1-second chunks
+                console.log('Audio recording started');
+            }
+        } catch (err) {
+            console.error('Error setting up audio recording:', err);
+        }
+    }
+
+    // Show camera-only notification
+    function showCameraOnlyNotification() {
+        const alertDiv = document.querySelector('.alert-danger');
+        if (alertDiv) {
+            alertDiv.innerHTML = `
+                <strong>Camera-Only Mode:</strong> Your webcam is active for proctoring. 
+                Microphone is not available - some audio-based monitoring features are disabled.
+                <br><small class="text-muted">This is acceptable for taking the exam.</small>
+            `;
+            alertDiv.className = 'alert alert-warning';
+        }
+    }
+    
+    // Format time as MM:SS
+    function formatTime(seconds) {
+        const minutes = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        return `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+    
+    // Timer function
+    function startTimer() {
+        updateTimerDisplay();
+        
+        timerInterval = setInterval(() => {
+            remainingTime--;
+            updateTimerDisplay();
+            
+            if (remainingTime <= 0) {
+                clearInterval(timerInterval);
+                submitExam();
+            }
+        }, 1000);
+    }
+    
+    // Update timer display
+    function updateTimerDisplay() {
+        document.getElementById('time-display').textContent = formatTime(remainingTime);
+    }
+    
+    // Start proctoring - FASTER DETECTION
+    function startProctoring() {
+        proctorInterval = setInterval(checkForCheating, 2000); // Check every 2 seconds for faster response
+        console.log('🔍 Proctoring started - checking every 2 seconds');
+    }
+    
+    // Check for cheating - ENHANCED WITH BETTER LOGGING
+    async function checkForCheating() {
+        try {
+            // Capture current frame from webcam
+            const canvas = document.createElement('canvas');
+            const video = document.getElementById('webcam-feed');
+            
+            // Make sure video has loaded
+            if (video.videoWidth === 0 || video.videoHeight === 0) {
+                console.log('⏳ Video not ready yet, skipping frame processing');
+                return;
+            }
+            
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            // Convert to base64 with better compression
+            const imageData = canvas.toDataURL('image/jpeg', 0.7);
+            
+            console.log(`📹 Processing frame: ${canvas.width}x${canvas.height}`);
+            
+            // Send to server for processing
+            const response = await fetch('/api/process_frame', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    frame: imageData,
+                    session_id: '{{ session_id }}',
+                    timestamp: new Date().toISOString()
+                })
+            });
+            
+            if (!response.ok) {
+                console.error('❌ Frame processing failed:', response.status, response.statusText);
+                return;
+            }
+            
+            const data = await response.json();
+            console.log('📊 Server response:', data);
+            
+            // Handle alerts from the detection system - IMMEDIATE RESPONSE
+            if (data.alert) {
+                const alert = data.alert;
+                const alertMessage = alert.message || alert.type || 'Suspicious activity detected';
+                console.log('🚨 IMMEDIATE ALERT:', alert);
+                
+                // Show alert immediately
+                showCheatingAlert(alertMessage);
+                
+                // Log to console for debugging
+                console.warn(`DETECTION: ${alert.type} (${(alert.confidence * 100).toFixed(1)}% confidence) at ${alert.timestamp}`);
+            }
+            
+            // Log successful processing for debugging
+            if (data.has_detections) {
+                console.log(`✅ Frame processed: ${data.detections_count} detections found`);
+            } else {
+                console.log('✅ Frame processed: No detections');
+            }
+            
+            // Handle errors
+            if (data.error) {
+                console.error('❌ Detection error:', data.error);
+            }
+            
+        } catch (err) {
+            console.error('❌ Error in proctoring:', err);
+            // Show network error alert occasionally
+            if (Math.random() < 0.1) { // 10% chance to show network error
+                console.warn('Network error in proctoring - this may affect detection');
+            }
+        }
+    }
+    
+    // Show cheating alert - ENHANCED VERSION
+    function showCheatingAlert(type) {
+        const alertElement = document.getElementById('cheating-alert');
+        const alertText = type || 'Suspicious activity detected';
+        
+        document.getElementById('cheating-type').textContent = alertText;
+        alertElement.style.display = 'block';
+        
+        // Add visual emphasis
+        alertElement.style.animation = 'none';
+        alertElement.offsetHeight; // Trigger reflow
+        alertElement.style.animation = 'pulse 0.5s ease-in-out';
+        
+        // Auto-hide after 5 seconds
+        setTimeout(() => {
+            if (alertElement.style.display === 'block') {
+                alertElement.style.display = 'none';
+            }
+        }, 5000);
+        
+        // Log to console for debugging
+        console.warn(`🚨 ALERT DISPLAYED: ${alertText}`);
+        
+        // Optional: Play alert sound (uncomment if needed)
+        // try {
+        //     const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmGgU7k9n1unEiBC13yO/eizEIHWq+8+OWT');
+        //     audio.play().catch(e => console.log('Audio play failed:', e));
+        // } catch (e) {
+        //     console.log('Audio not supported');
+        // }
+    }
+    
+    // Dismiss cheating alert
+    function dismissCheatingAlert() {
+        document.getElementById('cheating-alert').style.display = 'none';
+    }
+    
+    // Save answer
+    async function saveAnswer(questionId, answer, type) {
+        try {
+            const response = await fetch('/save_answer', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    question_id: questionId,
+                    answer: answer,
+                    type: type
+                })
+            });
+            
+            const data = await response.json();
+            if (data.success) {
+                const indicator = document.getElementById(`save-${type}-${questionId}`);
+                indicator.style.display = 'block';
+                setTimeout(() => {
+                    indicator.style.display = 'none';
+                }, 3000);
+            }
+        } catch (err) {
+            console.error('Error saving answer:', err);
+        }
+    }
+    
+    // Save answer to server
+    async function saveAnswer(questionId, answer, type) {
+        try {
+            const response = await fetch('/api/save_answer', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: '{{ session_id }}',
+                    question_id: questionId,
+                    answer: answer,
+                    type: type,
+                    timestamp: new Date().toISOString()
+                })
+            });
+            
+            const data = await response.json();
+            if (data.status === 'saved') {
+                // Show save indicator
+                const indicator = document.getElementById(`save-mcq-${questionId}`);
+                if (indicator) {
+                    indicator.style.display = 'block';
+                    setTimeout(() => {
+                        indicator.style.display = 'none';
+                    }, 2000);
+                }
+                console.log(`Answer saved for question ${questionId}:`, answer);
+            }
+        } catch (err) {
+            console.error('Error saving answer:', err);
+        }
+    }
+
+    // Submit exam
+    async function submitExam() {
+        try {
+            // Stop all recording and intervals
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+            
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+            
+            clearInterval(timerInterval);
+            clearInterval(proctorInterval);
+            
+            // Submit to server
+            const response = await fetch('/api/submit_exam', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({})
+            });
+            
+            const data = await response.json();
+            if (data.success && data.redirect) {
+                window.location.href = data.redirect;
+            } else {
+                alert('Failed to submit exam. Please try again.');
+            }
+        } catch (err) {
+            console.error('Error submitting exam:', err);
+            alert('An error occurred while submitting the exam.');
+        }
+    }
+    
+    // Event listeners
+    document.addEventListener('DOMContentLoaded', () => {
+        // Initialize media and timer
+        initializeMedia();
+        startTimer();
+        
+        // MCQ answer saving
+        document.querySelectorAll('input[type="radio"][data-type="mcq"]').forEach(radio => {
+            radio.addEventListener('change', function() {
+                const questionId = this.dataset.questionId;
+                const value = this.value;
+                saveAnswer(questionId, parseInt(value), 'mcq');
+            });
+        });
+        
+
+        
+        // Submit button
+        document.getElementById('submit-exam').addEventListener('click', () => {
+            if (confirm('Are you sure you want to submit your exam? You cannot make changes after submission.')) {
+                submitExam();
+            }
+        });
+    });
+    
+    // Make dismissCheatingAlert function globally accessible
+    window.dismissCheatingAlert = dismissCheatingAlert;
+
+
+    // Tab/window focus detection
+    let tabFocusWarnings = 0;
+    const MAX_TAB_WARNINGS = 3;
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            tabFocusWarnings++;
+            showCheatingAlert(`Warning: Switching tabs/windows detected (${tabFocusWarnings}/${MAX_TAB_WARNINGS})`);
+            
+            if (tabFocusWarnings >= MAX_TAB_WARNINGS) {
+                submitExam();
+                alert('Exam automatically submitted due to multiple tab switching attempts.');
+            }
+        }
+    });
+
+    // Prevent right-click context menu
+    document.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        showCheatingAlert('Right-clicking is not allowed during the exam');
+    });
+
+    // Prevent keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && 
+            (e.key === 'c' || e.key === 'v' || e.key === 'a' || 
+             e.key === 'p' || e.key === 'r' || e.key === 'Tab')) {
+            e.preventDefault();
+            showCheatingAlert('Keyboard shortcuts are not allowed during the exam');
+        }
+    });
+</script>
+
+
+{% endblock %}

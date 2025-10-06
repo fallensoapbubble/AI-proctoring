@@ -1,0 +1,28 @@
+# Simple Dockerfile for AI Proctoring System
+FROM python:3.11-slim
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    FLASK_APP=main_clean.py \
+    FLASK_ENV=development
+
+WORKDIR /app
+
+# Copy requirements first for better caching
+COPY requirements.txt ./
+
+# Install Python packages (minimal set)
+RUN pip install --no-cache-dir Flask numpy Pillow
+
+# Copy application code
+COPY . .
+
+# Create necessary directories
+RUN mkdir -p sessions evidence logs
+
+# Expose port
+EXPOSE 5000
+
+# Simple entrypoint
+CMD ["python", "main_clean.py", "web"]
