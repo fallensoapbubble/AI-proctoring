@@ -20,8 +20,17 @@ mkdir -p evidence/screenshots evidence/audio evidence/metadata \
          sessions config logs/system logs/cheating logs/evidence models \
          2>/dev/null || log "⚠️  Some directories already exist or permission denied - continuing..."
 
+# Ensure sessions directory is writable (critical for app functionality)
+log "🔐 Setting up sessions directory permissions..."
+if [ -d "/app/sessions" ]; then
+    chmod -R 755 /app/sessions 2>/dev/null || log "⚠️  Could not set sessions permissions"
+    touch /app/sessions/.test_write 2>/dev/null && rm -f /app/sessions/.test_write && log "✓ Sessions directory is writable" || log "❌ Sessions directory is not writable"
+else
+    mkdir -p /app/sessions && chmod 755 /app/sessions && log "✓ Created sessions directory"
+fi
+
 # Set proper permissions (ignore errors for mounted volumes)
-chmod -R 755 evidence config logs cheating_evidence sessions models 2>/dev/null || log "⚠️  Permission setting skipped for mounted volumes"
+chmod -R 755 evidence config logs cheating_evidence models 2>/dev/null || log "⚠️  Permission setting skipped for mounted volumes"
 
 # Verify and download YOLO models if missing
 log "🔍 Checking YOLO models..."

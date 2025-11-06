@@ -44,12 +44,14 @@ RUN pip install --upgrade pip setuptools wheel && \
     apt-get autoremove -y && apt-get clean && \
     rm -rf /var/lib/apt/lists/* /root/.cache/pip/* /tmp/*
 
-# Create directory structure
+# Create directory structure with proper permissions
 RUN mkdir -p evidence/screenshots evidence/audio evidence/metadata \
              cheating_evidence/screenshots cheating_evidence/audio \
              config logs/system logs/cheating logs/evidence models \
+             sessions templates static \
              /tmp/matplotlib /tmp/yolo /home/appuser/.config && \
-    chown -R appuser:appuser /app /tmp/matplotlib /tmp/yolo /home/appuser
+    chown -R appuser:appuser /app /tmp/matplotlib /tmp/yolo /home/appuser && \
+    chmod -R 755 /app
 
 # Copy application code (optimized with .dockerignore)
 COPY --chown=appuser:appuser . .
