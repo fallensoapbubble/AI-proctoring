@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>FaceGuard Test Lab</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .verdict-box { font-size: 24px; font-weight: bold; padding: 20px; text-align: center; border-radius: 8px; margin-bottom: 20px;}
+        .v-cheat { background: #ffebee; color: #c62828; border: 2px solid #c62828; }
+        .v-normal { background: #e8f5e9; color: #2e7d32; border: 2px solid #2e7d32; }
+        #webcam { width: 100%; border-radius: 8px; transform: scaleX(-1); border: 3px solid #333; }
+        #snapshot { width: 100%; border-radius: 8px; border: 3px solid #0d6efd; display: none; }
+        .metrics-card { text-align: center; padding: 10px; background: #f8f9fa; border-radius: 5px; border: 1px solid #ddd; }
+    </style>
+</head>
+<body class="bg-light">
+<div class="container mt-4">
+    <div class="row mb-3">
+        <div class="col-12">
+            <h2 class="text-center">🧪 FaceGuard Human-in-the-Loop Tester</h2>
+            <div class="d-flex justify-content-center gap-3 mt-3">
+                <div class="metrics-card">Total: <strong>{{ stats.total }}</strong></div>
+                <div class="metrics-card">Accuracy: <strong>{{ stats.accuracy }}%</strong></div>
+                <div class="metrics-card text-success">TP: {{ stats.tp }} | TN: {{ stats.tn }}</div>
+                <div class="metrics-card text-danger">FP: {{ stats.fp }} | FN: {{ stats.fn }}</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-6">
+            <div class="card shadow-sm">
+                <div class="card-header bg-dark text-white">1. Live Feed</div>
+                <div class="card-body text-center">
+                    <video id="webcam" autoplay playsinline></video>
+                    <button class="btn btn-primary w-100 mt-3 btn-lg" onclick="processFrame()">
+                        📸 Capture & Analyze
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6">
+            <div class="card shadow-sm">
+                <div class="card-header bg-dark text-white">2. AI Verdict & Labeling</div>
+                <div class="card-body">
+                    <div id="loading" class="text-center d-none py-5">
+                        <div class="spinner-border text-primary" role="status"></div>
+                    </div>
+
+                    <div id="result-area" class="d-none">
+                        <div id="ai-badge" class="verdict-box">Loading...</div>
+                        
+                        <div class="text-center mb-3">
+                            <img id="snapshot" class="img-fluid">
+                            <div class="text-muted mt-2 small" id="detection-details"></div>
+                        </div>
+
+                        <hr>
+                        <h5 class="text-center mb-3">Is the AI Correct?</h5>
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <button class="btn btn-outline-danger w-100 py-3" onclick="submitLabel('CHEATING')">
+                                    It is CHEATING ❌
+                                </button>
+                            </div>
+                            <div class="col-6">
+                                <button class="btn btn-outline-success w-100 py-3" onclick="submitLabel('NORMAL')">
+                                    It is NORMAL ✅
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div id="placeholder" class="text-center py-5 text-muted">
+                        Take a snapshot to see AI analysis...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const video = document.getElementById('webcam');
+    const canvas = document.createElement('canvas');
+    let currentResult = null;
+
+    navigator.mediaDevices.getUserMedia({ video: true }).then(stream => video.srcObject = stream);
+
+    async function processFrame() {
+        // UI Updates
+        document.getElementById('placeholder').classList.add('d-none');
+        document.getElementById('result-area').classList.add('d-none');
+        document.getElementById('loading').classList.remove('d-none');
+
+        // Capture
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+        const imgData = canvas.toDataURL('image/jpeg', 0.8);
+
+        // Send to Backend
+        const res = await fetch('/api/test/process', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ image: imgData })
+        });
+        currentResult = await res.json();
+
+        // Update UI with Result
+        document.getElementById('loading').classList.add('d-none');
+        document.getElementById('result-area').classList.remove('d-none');
+        
+        const badge = document.getElementById('ai-badge');
+        badge.innerText = "AI Verdict: " + currentResult.verdict;
+        badge.className = "verdict-box " + (currentResult.verdict === "CHEATING" ? "v-cheat" : "v-normal");
+
+        const snap = document.getElementById('snapshot');
+        snap.src = currentResult.image_url;
+        snap.style.display = 'block';
+
+        // Format details
+        let detailsHtml = "<strong>Detections:</strong> ";
+        if (currentResult.details.length === 0) detailsHtml += "None";
+        else {
+            currentResult.details.forEach(d => {
+                detailsHtml += `<span class="badge bg-secondary mx-1">${d.type} (${(d.confidence*100).toFixed(0)}%)</span>`;
+            });
+        }
+        document.getElementById('detection-details').innerHTML = detailsHtml;
+    }
+
+    async function submitLabel(label) {
+        await fetch('/api/test/submit', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                ai_verdict: currentResult.verdict,
+                human_label: label,
+                filename: currentResult.filename,
+                details: currentResult.details
+            })
+        });
+        location.reload(); // Refresh to update stats
+    }
+</script>
+</body>
+</html>

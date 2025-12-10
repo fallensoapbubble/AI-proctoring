@@ -32,9 +32,9 @@ A comprehensive AI-powered proctoring system with screen capture, audio recordin
 - Microphone (recommended)
 - Modern web browser with WebRTC support
 
-### Python Dependencies
+### See Errors
 ```bash
-pip install -r requirements.txt
+docker logs -f --tail 100 -t ai-proctoring-system-proctoring-app-1
 ```
 
 Key dependencies:
@@ -216,47 +216,3 @@ Enable debug logging:
 ```bash
 FLASK_ENV=development python app.py
 ```
-
-### Cleanup
-Remove temporary files:
-```bash
-python cleanup.py
-```
-
-## 📊 Performance Optimization
-
-### Resource Usage
-- CPU: 2-4 cores recommended
-- RAM: 2GB minimum, 4GB recommended
-- Storage: 1GB for models + evidence storage
-- Network: Minimal (local processing)
-
-### Optimization Tips
-- Use Docker for consistent performance
-- Configure detection thresholds appropriately
-- Monitor evidence storage usage
-- Regular cleanup of old sessions
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## 🆘 Support
-
-For issues and questions:
-1. Check the troubleshooting section
-2. Review the debug console output
-3. Check browser compatibility
-4. Verify system requirements
-
----
-
-**Note**: This system is designed for educational and testing purposes. Ensure compliance with local privacy laws and institutional policies when deploying in production environments.

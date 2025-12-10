@@ -1583,6 +1583,28 @@ def internal_error(error):
                          error_code=500,
                          error_message="Internal server error"), 500
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# --- ADD THIS FOR TESTING ---
+from test import test_bp
+app.register_blueprint(test_bp)
+# ----------------------------
+
+
+
+
 if __name__ == '__main__':
     print("🚀 Starting AI Proctoring System Web Application...")
     
