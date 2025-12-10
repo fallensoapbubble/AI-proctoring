@@ -16,16 +16,18 @@ ENV PYTHONUNBUFFERED=1 \
     MPLCONFIGDIR=/tmp/matplotlib \
     YOLO_CONFIG_DIR=/tmp/yolo
 
-# Install system dependencies in single layer (optimized)
+# Install minimal system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Essential utilities
     wget curl ca-certificates \
+    # OpenCV dependencies
     libglib2.0-0 libsm6 libxext6 libxrender1 libgomp1 \
-    libgl1-mesa-dev libglu1-mesa-dev libfontconfig1 libxcb1 \
-    libasound2-dev portaudio19-dev libsndfile1 \
+    libgl1-mesa-dev libglu1-mesa-dev \
+    # Audio dependencies (minimal)
+    libasound2-dev portaudio19-dev \
+    # Build tools (will be removed after pip install)
     gcc g++ python3-dev \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean \
-    && apt-get autoremove -y
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -35,18 +37,20 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser
 # Copy requirements for better caching
 COPY requirements.docker.txt ./
 
-# Install Python packages in optimized batches
+# Install Python packages efficiently
 RUN pip install --upgrade pip setuptools wheel && \
-    # Install all packages in one layer for better caching
+    # Install CPU-only PyTorch first for smaller size
+    pip install --no-cache-dir torch==2.1.0+cpu torchvision==0.16.0+cpu --index-url https://download.pytorch.org/whl/cpu && \
+    # Install remaining packages
     pip install --no-cache-dir -r requirements.docker.txt && \
-    # Clean up build dependencies to reduce image size
+    # Clean up build dependencies and caches
     apt-get remove -y gcc g++ python3-dev && \
     apt-get autoremove -y && apt-get clean && \
-    rm -rf /var/lib/apt/lists/* /root/.cache/pip/* /tmp/*
+    rm -rf /var/lib/apt/lists/* /root/.cache/pip/* /tmp/* ~/.cache
 
 # Create directory structure with proper permissions
-RUN mkdir -p evidence/screenshots evidence/audio evidence/metadata \
-             cheating_evidence/screenshots cheating_evidence/audio \
+RUN mkdir -p evidence/screenshots evidence/metadata \
+             cheating_evidence/screenshots \
              config logs/system logs/cheating logs/evidence models \
              sessions templates static \
              /tmp/matplotlib /tmp/yolo /home/appuser/.config && \

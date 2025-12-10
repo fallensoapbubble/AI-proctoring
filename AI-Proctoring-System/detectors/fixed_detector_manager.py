@@ -16,49 +16,15 @@ import queue
 # Import fixed detector implementations
 from .fixed_gaze_detector import FixedGazeDetector
 from .fixed_mobile_detector import FixedMobileDetector
+from .face_guard_detector import FaceGuardDetector
+from .system_audio_detector import SystemAudioDetector
+from .screen_capture_detector import ScreenCaptureDetector
 
-# Try to import other detectors with fallbacks
-try:
-    from .lip_movement_detector import LipMovementDetector
-except ImportError:
-    LipMovementDetector = None
-
-try:
-    from .speech_analyzer import SpeechAnalyzer
-except ImportError:
-    SpeechAnalyzer = None
-
-try:
-    from .person_detector import PersonDetector
-except ImportError:
-    PersonDetector = None
-
-try:
-    from .face_spoof_detector import FaceSpoofDetector
-except ImportError:
-    FaceSpoofDetector = None
-
-try:
-    from context_engine.interfaces import DetectionSource
-    from context_engine.models import DetectionEvent, SystemConfiguration
-    from context_engine.analyzer import ContextCueAnalyzer
-except ImportError:
-    # Create minimal fallbacks
-    class DetectionSource:
-        pass
-    
-    class DetectionEvent:
-        def __init__(self, **kwargs):
-            for k, v in kwargs.items():
-                setattr(self, k, v)
-    
-    class SystemConfiguration:
-        def __init__(self):
-            pass
-    
-    class ContextCueAnalyzer:
-        def __init__(self, config):
-            pass
+# Create minimal fallbacks for context engine components
+class DetectionEvent:
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
 
 
 class FixedDetectorManager:
@@ -116,34 +82,25 @@ class FixedDetectorManager:
         except Exception as e:
             print(f"✗ Failed to initialize mobile detector: {e}")
         
-        # Try to initialize other detectors with fallbacks
-        if LipMovementDetector:
-            try:
-                self.detectors['lip_movement'] = LipMovementDetector(detector_configs.get('lip_movement', {}))
-                print("✓ Lip movement detector initialized")
-            except Exception as e:
-                print(f"✗ Failed to initialize lip movement detector: {e}")
+        try:
+            self.detectors['face_guard'] = FaceGuardDetector(detector_configs.get('face_guard', {}))
+            print("✓ FaceGuard detector initialized")
+        except Exception as e:
+            print(f"✗ Failed to initialize FaceGuard detector: {e}")
         
-        if SpeechAnalyzer:
-            try:
-                self.detectors['speech'] = SpeechAnalyzer(detector_configs.get('speech', {}))
-                print("✓ Speech analyzer initialized")
-            except Exception as e:
-                print(f"✗ Failed to initialize speech analyzer: {e}")
+        try:
+            self.detectors['system_audio'] = SystemAudioDetector(detector_configs.get('system_audio', {}))
+            print("✓ System audio detector initialized")
+        except Exception as e:
+            print(f"✗ Failed to initialize system audio detector: {e}")
         
-        if PersonDetector:
-            try:
-                self.detectors['person'] = PersonDetector(detector_configs.get('person', {}))
-                print("✓ Person detector initialized")
-            except Exception as e:
-                print(f"✗ Failed to initialize person detector: {e}")
+        try:
+            self.detectors['screen_capture'] = ScreenCaptureDetector(detector_configs.get('screen_capture', {}))
+            print("✓ Screen capture detector initialized")
+        except Exception as e:
+            print(f"✗ Failed to initialize screen capture detector: {e}")
         
-        if FaceSpoofDetector:
-            try:
-                self.detectors['face_spoof'] = FaceSpoofDetector(detector_configs.get('face_spoof', {}))
-                print("✓ Face spoof detector initialized")
-            except Exception as e:
-                print(f"✗ Failed to initialize face spoof detector: {e}")
+        # Only fixed detectors are available in minimal version
         
         print(f"Initialized {len(self.detectors)} detectors successfully")
     
@@ -157,34 +114,38 @@ class FixedDetectorManager:
                 'roll_min': 80,
                 'roll_max': 110
             },
-            'lip_movement': {
-                'movement_threshold': 0.003,
-                'smoothing_window': 3
-            },
-            'speech': {
-                'cheating_keywords': [
-                    "answer", "solution", "help", "cheat", "google", "search",
-                    "tell me", "what is", "how do", "give me", "show me"
-                ],
-                'confidence_threshold': 0.6,
-                'listen_timeout': 5
-            },
+
             'mobile': {
                 'confidence_threshold': 0.6,
                 'model_path': 'yolov8s.pt',
                 'mobile_class_ids': [67]
             },
-            'person': {
-                'confidence_threshold': 0.5,
-                'max_expected_people': 1,
-                'model_path': 'yolov5s.pt'
+            'face_guard': {
+                'spoof_threshold': 100,
+                'lip_threshold': 8,
+                'yaw_threshold': 10,
+                'pitch_threshold': 10
             },
-            'face_spoof': {
-                'confidence_threshold': 0.5,
-                'spoof_confidence_threshold': 0.7,
-                'real_confidence_threshold': 0.85,
-                'model_path': 'yolov8n.pt'
-            }
+            'system_audio': {
+                'sample_rate': 44100,
+                'chunk_size': 1024,
+                'channels': 1,
+                'speech_threshold': 0.3,
+                'noise_threshold': 0.1,
+                'record_evidence': True
+            },
+            'screen_capture': {
+                'capture_interval': 2.0,
+                'save_screenshots': True,
+                'analyze_windows': True,
+                'window_change_threshold': 0.3,
+                'suspicious_apps': [
+                    'chrome', 'firefox', 'edge', 'safari', 'browser',
+                    'whatsapp', 'telegram', 'discord', 'slack', 'teams',
+                    'notepad', 'calculator', 'cmd', 'powershell', 'terminal'
+                ]
+            },
+
         }
     
     def start_detection(self, use_camera: bool = False) -> None:
@@ -237,11 +198,19 @@ class FixedDetectorManager:
             else:
                 print("Video processing will be handled via web streaming")
             
-            # Always start audio thread for speech analysis if available
-            if 'speech' in self.detectors:
+            # Start audio processing thread for system audio detector
+            if 'system_audio' in self.detectors:
                 self.audio_thread = threading.Thread(target=self._audio_processing_loop, daemon=True)
                 self.audio_thread.start()
-                print("Started audio processing thread")
+                print("Started audio processing thread with system audio detector")
+            
+            # Start screen capture detector (runs independently)
+            if 'screen_capture' in self.detectors:
+                screen_detector = self.detectors['screen_capture']
+                if hasattr(screen_detector, 'is_available') and screen_detector.is_available():
+                    print("Screen capture detector will run independently")
+                else:
+                    print("Screen capture detector not available")
             
             print("FixedDetectorManager started successfully")
             
@@ -317,35 +286,36 @@ class FixedDetectorManager:
         print("Video processing loop stopped")
     
     def _audio_processing_loop(self) -> None:
-        """Main audio processing loop."""
+        """Main audio processing loop for system audio detector."""
         print("Starting audio processing loop")
         
-        speech_analyzer = self.detectors.get('speech')
-        if not speech_analyzer:
-            print("Speech analyzer not available for audio processing")
+        audio_detector = self.detectors.get('system_audio')
+        if not audio_detector:
+            print("No system audio detector available")
             return
         
         while self.is_running:
             try:
-                # Process pending speech events
-                if hasattr(speech_analyzer, 'get_pending_events'):
-                    events = speech_analyzer.get_pending_events()
-                    for event in events:
-                        self._process_detection_event(event)
+                # Audio processing is handled internally by the SystemAudioDetector
+                # This loop just monitors the detector status
+                if hasattr(audio_detector, 'is_running') and not audio_detector.is_running:
+                    print("System audio detector stopped running")
+                    break
                 
-                time.sleep(0.1)
+                # Check detector health periodically
+                time.sleep(1.0)
                 
             except Exception as e:
                 if self.is_running:
                     print(f"Error in audio processing loop: {e}")
-                time.sleep(0.5)
+                time.sleep(0.1)
         
         print("Audio processing loop stopped")
     
     def _process_video_frame(self, frame: np.ndarray) -> None:
         """Process a video frame with all video-based detectors."""
-        # Process with each video-based detector
-        video_detectors = ['gaze', 'lip_movement', 'mobile', 'person', 'face_spoof']
+        # Process with each video-based detector (minimal version)
+        video_detectors = ['gaze', 'mobile', 'face_guard']
         
         for detector_name in video_detectors:
             detector = self.detectors.get(detector_name)
@@ -358,21 +328,24 @@ class FixedDetectorManager:
             
             try:
                 # Call appropriate detection method based on detector type
-                event = None
+                events = []
                 
                 if detector_name == 'gaze' and hasattr(detector, 'detect_gaze_direction'):
                     event = detector.detect_gaze_direction(frame)
-                elif detector_name == 'lip_movement' and hasattr(detector, 'detect_lip_movement'):
-                    event = detector.detect_lip_movement(frame)
+                    if event:
+                        events = [event]
                 elif detector_name == 'mobile' and hasattr(detector, 'detect_mobile_devices'):
                     event = detector.detect_mobile_devices(frame)
-                elif detector_name == 'person' and hasattr(detector, 'detect_people'):
-                    event = detector.detect_people(frame)
-                elif detector_name == 'face_spoof' and hasattr(detector, 'detect_face_spoof'):
-                    event = detector.detect_face_spoof(frame)
+                    if event:
+                        events = [event]
+                elif detector_name == 'face_guard' and hasattr(detector, 'process_frame'):
+                    # FaceGuard returns multiple events
+                    events = detector.process_frame(frame)
                 
-                if event:
-                    self._process_detection_event(event)
+                # Process all events
+                for event in events:
+                    if event:
+                        self._process_detection_event(event)
                     
             except Exception as e:
                 print(f"Error processing frame with {detector_name} detector: {e}")

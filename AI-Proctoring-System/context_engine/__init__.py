@@ -1,29 +1,19 @@
 """
-Context-Aware Alerts Engine
+Context Engine Package - AI Proctoring System
 
-This module provides intelligent multi-modal analysis for AI proctoring systems.
-It combines detection signals from various sources to reduce false positives
-and improve detection accuracy through contextual reasoning.
+This package contains the minimal context analysis engine for the proctoring system.
 """
 
-__version__ = "1.0.0"
-__author__ = "AI Proctoring System"
-
-from .models import DetectionEvent, AnalysisResult, Alert, SystemConfiguration
-
-# Import other components when they are implemented
-# from .analyzer import ContextCueAnalyzer
-# from .correlation import CorrelationManager
-# from .config import ConfigurationService
-# from .alerts import AlertManager
+# Import simple components (minimal implementation)
+try:
+    from .simple_analyzer import SimpleAnalyzer
+    from .simple_config import SimpleConfig
+except ImportError as e:
+    print(f"Warning: Context engine components not available: {e}")
+    SimpleAnalyzer = None
+    SimpleConfig = None
 
 __all__ = [
-    'DetectionEvent',
-    'AnalysisResult', 
-    'Alert',
-    'SystemConfiguration',
-    # 'ContextCueAnalyzer',
-    # 'CorrelationManager',
-    # 'ConfigurationService',
-    # 'AlertManager'
+    'SimpleAnalyzer',
+    'SimpleConfig'
 ]

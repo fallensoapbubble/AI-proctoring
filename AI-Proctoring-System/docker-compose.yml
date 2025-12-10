@@ -16,6 +16,9 @@ services:
       - OPENCV_LOG_LEVEL=ERROR
       - TORCH_HOME=/app/models
       - PYTHONUNBUFFERED=1
+      # Audio environment variables
+      - PULSE_RUNTIME_PATH=/run/user/1000/pulse
+      - PULSE_COOKIE_DATA=/tmp/pulse-cookie
       # Performance optimizations
       - OMP_NUM_THREADS=2
       - MKL_NUM_THREADS=2
@@ -27,6 +30,14 @@ services:
       - proctoring-config:/app/config
       - proctoring-logs:/app/logs
       - proctoring-models:/app/models
+      # Audio device access (Linux/macOS only - commented out for Windows compatibility)
+      # - /dev/snd:/dev/snd:ro
+      # PulseAudio socket (Linux only - commented out for Windows compatibility)
+      # - /run/user/1000/pulse:/run/user/1000/pulse:ro
+      # - /tmp/.X11-unix:/tmp/.X11-unix:ro
+    # devices:
+      # Audio devices (commented out for Windows compatibility)
+      # - /dev/snd
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:5000/health || exit 1"]
@@ -47,6 +58,11 @@ services:
           cpus: '0.5'
     # Shared memory for ML operations
     shm_size: 256m
+    # Enable audio access
+    privileged: false
+    # Add audio group access (commented out for Windows compatibility)
+    # group_add:
+    #   - audio
 
 volumes:
   proctoring-models:

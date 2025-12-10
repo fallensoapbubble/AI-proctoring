@@ -1,46 +1,27 @@
-# Docker-optimized requirements for AI Proctoring System
-# Minimal dependencies for faster builds and smaller images
+# Essential requirements for AI Proctoring System
+# Optimized for minimal Docker image size and fast startup
 
 # Core Web Framework
 Flask==2.3.3
 Werkzeug==2.3.7
 
-# Computer Vision and Image Processing (headless for Docker)
+# Computer Vision (headless for Docker)
 opencv-python-headless==4.8.1.78
-Pillow==10.0.1
 numpy==1.24.4
 
-# Machine Learning and AI (CPU-optimized versions)
-torch==2.1.0
-torchvision==0.16.0
-ultralytics==8.0.196
-
-# MediaPipe for face/pose detection
+# Face Detection
 mediapipe==0.10.7
 
-# Audio Processing (minimal versions)
-SpeechRecognition==3.10.0
-pydub==0.25.1
+# Object Detection (mobile phones) - torch installed separately for CPU optimization
+ultralytics==8.0.196
+
+# Audio Processing (minimal)
 pyaudio==0.2.11
+SpeechRecognition==3.10.0
 
-# System Monitoring
-psutil==5.9.6
-
-# Configuration and Utilities
-PyYAML==6.0.1
-python-dotenv==1.0.0
-
-# Security
-cryptography==41.0.7
-
-# Date and time utilities
+# Utilities
+requests==2.31.0
 python-dateutil==2.8.2
 
-# HTTP requests
-requests==2.31.0
-
-# Production WSGI server
+# Production server
 gunicorn==21.2.0
-
-# Basic data processing
-scipy==1.11.4

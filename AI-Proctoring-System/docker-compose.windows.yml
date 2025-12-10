@@ -1,0 +1,27 @@
+version: '3.8'
+
+# Windows-specific Docker Compose override for audio support
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.windows.yml up
+
+services:
+  proctoring-app:
+    environment:
+      # Windows audio environment
+      - AUDIO_BACKEND=directsound
+      - WINDOWS_AUDIO_MODE=1
+    volumes:
+      # Remove Linux-specific audio volumes for Windows
+      - proctoring-evidence:/app/evidence
+      - proctoring-sessions:/app/sessions
+      - proctoring-config:/app/config
+      - proctoring-logs:/app/logs
+      - proctoring-models:/app/models
+      # Override Linux audio volumes to empty (Windows doesn't support these paths)
+    # Remove Linux-specific audio devices and groups - override to empty
+    devices: []
+    group_add: []
+    # Remove privileged mode and audio group
+    privileged: false
+    # Note: Windows Docker Desktop handles audio differently
+    # Audio recording will work through the browser's WebRTC API
+    # rather than direct microphone access in the container

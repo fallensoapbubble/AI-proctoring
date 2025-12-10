@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Any
 from .models import DetectionEvent, AnalysisResult, AlertRecommendation, DetectionType
 
 
-class SimpleContextAnalyzer:
+class SimpleAnalyzer:
     """
     Simplified context analyzer that provides basic analysis functionality.
     """
@@ -20,7 +20,7 @@ class SimpleContextAnalyzer:
         self.config = config
         self.events_processed = 0
         self.processing_times = []
-        print("SimpleContextAnalyzer initialized")
+        print("SimpleAnalyzer initialized")
     
     def process_event(self, event) -> Optional[AnalysisResult]:
         """Process a detection event (simplified)."""

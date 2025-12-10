@@ -54,9 +54,33 @@
 <script>
     document.getElementById('id-verification-form').addEventListener('submit', function(event) {
         event.preventDefault();
-        // In a real application, you would validate the information
-        // For this demo, we'll just redirect to the permissions page
-        window.location.href = "/permissions";
+        
+        // Get form data
+        const fullName = document.getElementById('full-name').value.trim();
+        const studentId = document.getElementById('student-id').value.trim();
+        const email = document.getElementById('email').value.trim();
+        
+        // Validate required fields
+        if (!fullName || !studentId || !email) {
+            alert('Please fill in all required fields.');
+            return;
+        }
+        
+        // Basic email validation
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            alert('Please enter a valid email address.');
+            return;
+        }
+        
+        // Pass student data to permissions page via URL parameters
+        const params = new URLSearchParams({
+            name: fullName,
+            student_id: studentId,
+            email: email
+        });
+        
+        window.location.href = `/permissions?${params.toString()}`;
     });
 </script>
 {% endblock %}

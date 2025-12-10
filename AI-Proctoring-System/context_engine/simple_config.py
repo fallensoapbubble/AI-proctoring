@@ -7,7 +7,7 @@ This is a simplified version that provides basic configuration capabilities.
 from typing import Dict, Any
 
 
-class SimpleSystemConfiguration:
+class SimpleConfig:
     """
     Simplified system configuration that provides basic settings.
     """
@@ -16,11 +16,7 @@ class SimpleSystemConfiguration:
         """Initialize simple configuration."""
         self.detection_thresholds = {
             'gaze_away': 0.7,
-            'lip_movement': 0.6,
-            'suspicious_speech': 0.8,
-            'multiple_people': 0.9,
-            'mobile_detected': 0.8,
-            'face_spoof': 0.9
+            'mobile_detected': 0.8
         }
         
         self.correlation_window_seconds = 5
@@ -31,7 +27,7 @@ class SimpleSystemConfiguration:
         self.max_processing_latency_ms = 500
         self.enable_gpu_acceleration = False
         
-        print("SimpleSystemConfiguration initialized")
+        print("SimpleConfig initialized")
     
     def get_threshold(self, detection_type) -> float:
         """Get threshold for detection type."""

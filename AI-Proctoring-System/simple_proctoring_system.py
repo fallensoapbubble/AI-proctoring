@@ -87,7 +87,7 @@ class UUIDSessionManager:
         print(f"Created session: {session_id}")
         return session_id
     
-    def save_screenshot(self, session_id: str, image_data: bytes, detection_type: str) -> str:
+    def save_screenshot(self, session_id: str, image_data: bytes, detection_type: str, timestamp: datetime = None) -> str:
         """Save a screenshot with timestamp."""
         session_dir = self.base_dir / session_id
         if not session_dir.exists():
@@ -96,8 +96,12 @@ class UUIDSessionManager:
         # Clean and sanitize detection type for filename
         clean_detection_type = self._sanitize_filename(detection_type)
         
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-        filename = f"screenshot_{clean_detection_type}_{timestamp}.jpg"
+        # Use provided timestamp or create new one
+        if timestamp is None:
+            timestamp = datetime.now()
+        
+        timestamp_str = timestamp.strftime("%Y%m%d_%H%M%S")
+        filename = f"screenshot_{clean_detection_type}_{timestamp_str}.jpg"
         filepath = session_dir / "screenshots" / filename
         
         # Save image data (or create dummy file if data is fake)
@@ -132,26 +136,61 @@ class UUIDSessionManager:
         print(f"Saved detection summary: {filename}")
         return str(filepath)
     
-    def save_audio(self, session_id: str, audio_data: bytes, audio_type: str) -> str:
-        """Save audio recording with timestamp."""
+    def save_audio(self, session_id: str, audio_data: bytes, audio_type: str, timestamp: datetime = None, convert_to_mp3: bool = True) -> str:
+        """Save audio recording with timestamp, optionally converting to MP3."""
         session_dir = self.base_dir / session_id
         if not session_dir.exists():
             raise ValueError(f"Session {session_id} not found")
         
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-        filename = f"audio_{audio_type}_{timestamp}.wav"
-        filepath = session_dir / "audio" / filename
+        # Use provided timestamp or create new one
+        if timestamp is None:
+            timestamp = datetime.now()
         
-        # Save audio data (or create dummy file if data is fake)
-        with open(filepath, 'wb') as f:
+        timestamp_str = timestamp.strftime("%Y%m%d_%H%M%S")
+        
+        # Save as WAV first
+        wav_filename = f"audio_{audio_type}_{timestamp_str}.wav"
+        wav_filepath = session_dir / "audio" / wav_filename
+        
+        # Save audio data
+        with open(wav_filepath, 'wb') as f:
             if isinstance(audio_data, str):
                 f.write(audio_data.encode())
             else:
                 f.write(audio_data)
         
-        self._update_metadata(session_id, "audio_files", 1)
-        print(f"Saved audio: {filename}")
-        return str(filepath)
+        print(f"Saved audio (WAV): {wav_filename}")
+        
+        # Convert to MP3 if requested
+        if convert_to_mp3:
+            try:
+                from pydub import AudioSegment
+                
+                mp3_filename = f"audio_{audio_type}_{timestamp_str}.mp3"
+                mp3_filepath = session_dir / "audio" / mp3_filename
+                
+                # Load WAV and export as MP3
+                audio = AudioSegment.from_wav(str(wav_filepath))
+                audio.export(str(mp3_filepath), format="mp3", bitrate="128k")
+                
+                # Remove WAV file to save space
+                wav_filepath.unlink()
+                
+                self._update_metadata(session_id, "audio_files", 1)
+                print(f"Converted to MP3: {mp3_filename}")
+                return str(mp3_filepath)
+                
+            except ImportError:
+                print("⚠️ pydub not available, keeping WAV format")
+                self._update_metadata(session_id, "audio_files", 1)
+                return str(wav_filepath)
+            except Exception as e:
+                print(f"⚠️ MP3 conversion failed: {e}, keeping WAV format")
+                self._update_metadata(session_id, "audio_files", 1)
+                return str(wav_filepath)
+        else:
+            self._update_metadata(session_id, "audio_files", 1)
+            return str(wav_filepath)
     
     def save_answer(self, session_id: str, question_id: int, answer: str, question_text: str = "") -> str:
         """Save an exam answer."""

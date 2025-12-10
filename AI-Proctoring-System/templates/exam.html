@@ -85,6 +85,96 @@
         margin-top: 5px;
         display: none;
     }
+    
+    /* Enhanced proctoring alerts */
+    .proctoring-alert {
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+        color: white;
+        padding: 15px 25px;
+        border-radius: 10px;
+        box-shadow: 0 4px 20px rgba(255, 107, 107, 0.4);
+        z-index: 2000;
+        animation: slideDown 0.3s ease-out;
+        max-width: 500px;
+        text-align: center;
+    }
+    
+    .proctoring-error {
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: linear-gradient(135deg, #dc3545, #c82333);
+        color: white;
+        padding: 15px 25px;
+        border-radius: 10px;
+        box-shadow: 0 4px 20px rgba(220, 53, 69, 0.4);
+        z-index: 2000;
+        animation: slideDown 0.3s ease-out;
+        max-width: 500px;
+        text-align: center;
+    }
+    
+    @keyframes slideDown {
+        from {
+            opacity: 0;
+            transform: translateX(-50%) translateY(-20px);
+        }
+        to {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+    }
+    
+    .alert-content, .error-content {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+    
+    .alert-icon, .error-icon {
+        font-size: 1.2em;
+    }
+    
+    .alert-confidence {
+        font-size: 0.9em;
+        opacity: 0.9;
+    }
+    
+    /* Status indicators */
+    #proctoring-status {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        background: rgba(0, 0, 0, 0.8);
+        color: white;
+        padding: 8px 15px;
+        border-radius: 20px;
+        font-size: 0.9em;
+        z-index: 1000;
+    }
+    
+    .status-active {
+        background: rgba(40, 167, 69, 0.9) !important;
+    }
+    
+    #detection-counter {
+        position: fixed;
+        bottom: 60px;
+        right: 20px;
+        background: rgba(0, 0, 0, 0.8);
+        color: white;
+        padding: 5px 12px;
+        border-radius: 15px;
+        font-size: 0.8em;
+        z-index: 1000;
+    }
 </style>
 {% endblock %}
 
@@ -93,7 +183,15 @@
 
 <div id="webcam-container">
     <video id="webcam-feed" autoplay playsinline muted></video>
+    <canvas id="canvas" style="display: none;"></canvas>
 </div>
+
+<!-- Proctoring status indicators -->
+<div id="proctoring-status">Initializing proctoring...</div>
+<div id="detection-counter">Detections: 0</div>
+
+<!-- Hidden session ID for JavaScript -->
+<div id="session-id" style="display: none;">{{ session_id }}</div>
 
 <div id="cheating-alert">
     <h3>⚠️ WARNING: Suspicious Activity Detected!</h3>
@@ -143,6 +241,8 @@
 {% endblock %}
 
 {% block scripts %}
+<!-- Enhanced Exam Proctoring Script -->
+<script src="{{ url_for('static', filename='js/exam.js') }}"></script>
 <script>
     // Global variables
     let stream = null;

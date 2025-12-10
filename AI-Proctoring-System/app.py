@@ -11,9 +11,19 @@ import json
 import base64
 import cv2
 import numpy as np
+import math
+import time
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash
+
+# FaceGuard imports
+try:
+    import mediapipe as mp
+    MEDIAPIPE_AVAILABLE = True
+except ImportError:
+    MEDIAPIPE_AVAILABLE = False
+    print("MediaPipe not available - FaceGuard will use fallback mode")
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -87,8 +97,6 @@ except ImportError as e:
             
             return file_counts
 from detectors.fixed_detector_manager import FixedDetectorManager
-from detectors.fixed_gaze_detector import FixedGazeDetector
-from detectors.fixed_mobile_detector import FixedMobileDetector
 
 # Import context engine components
 try:
@@ -101,10 +109,218 @@ except ImportError:
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-key-change-in-production')
 
+# FaceGuard Detector Class
+class FaceGuard:
+    def __init__(self):
+        # Initialize MediaPipe Face Mesh
+        if MEDIAPIPE_AVAILABLE:
+            self.mp_face_mesh = mp.solutions.face_mesh
+            self.face_mesh = self.mp_face_mesh.FaceMesh(
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5,
+                max_num_faces=5  # Allow tracking multiple to detect violations
+            )
+            self.mp_drawing = mp.solutions.drawing_utils
+            self.drawing_spec = self.mp_drawing.DrawingSpec(thickness=1, circle_radius=1)
+        else:
+            self.mp_face_mesh = None
+            self.face_mesh = None
+            self.mp_drawing = None
+            self.drawing_spec = None
+
+        # Thresholds
+        self.SPOOF_THRESH = 100        # Lower variance = likely spoof (blur/screen)
+        self.LIP_THRESH = 8            # Distance between lips to count as open
+        self.LOOK_AWAY_X_THRESH = 10   # Yaw angle threshold (degrees)
+        self.LOOK_AWAY_Y_THRESH = 10   # Pitch angle threshold (degrees)
+
+    def get_head_pose(self, image, landmarks):
+        """Estimate head pose (Yaw, Pitch, Roll) using SolvePnP."""
+        img_h, img_w, _ = image.shape
+        face_3d = []
+        face_2d = []
+
+        # Key landmarks for pose estimation
+        # Nose tip (1), Chin (199), Left Eye (33), Right Eye (263), Mouth Left (61), Mouth Right (291)
+        key_points = [1, 199, 33, 263, 61, 291]
+
+        for idx, lm in enumerate(landmarks.landmark):
+            if idx in key_points:
+                x, y = int(lm.x * img_w), int(lm.y * img_h)
+                face_2d.append([x, y])
+                face_3d.append([x, y, lm.z])
+
+        face_2d = np.array(face_2d, dtype=np.float64)
+        face_3d = np.array(face_3d, dtype=np.float64)
+
+        # Camera matrix approximation
+        focal_length = 1 * img_w
+        cam_matrix = np.array([[focal_length, 0, img_h / 2],
+                              [0, focal_length, img_w / 2],
+                              [0, 0, 1]])
+        dist_matrix = np.zeros((4, 1), dtype=np.float64)
+
+        # Solve PnP
+        success, rot_vec, trans_vec = cv2.solvePnP(face_3d, face_2d, cam_matrix, dist_matrix)
+        
+        if not success:
+            return False, "Pose estimation failed"
+
+        rmat, jac = cv2.Rodrigues(rot_vec)
+        angles, mtxR, mtxQ, Qx, Qy, Qz = cv2.RQDecomp3x3(rmat)
+
+        # Angles in degrees
+        x = angles[0] * 360
+        y = angles[1] * 360
+
+        is_looking_away = False
+        if abs(y) > self.LOOK_AWAY_X_THRESH or abs(x) > self.LOOK_AWAY_Y_THRESH:
+            is_looking_away = True
+
+        return is_looking_away, f"X: {int(x)}, Y: {int(y)}"
+
+    def check_spoof(self, image, face_bbox):
+        """Basic Spoof Detection using Laplacian Variance (Blur Check).
+        Real faces usually have high texture/sharpness. Screens/photos often blur.
+        Note: For production, use a trained MiniFASNet model."""
+        x, y, w, h = face_bbox
+
+        # Ensure bbox is within bounds
+        x, y = max(0, x), max(0, y)
+        face_roi = image[y:y+h, x:x+w]
+        if face_roi.size == 0: 
+            return False, 0
+
+        gray_face = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
+        laplacian_var = cv2.Laplacian(gray_face, cv2.CV_64F).var()
+
+        # If variance is too low, it might be a flat screen or photo
+        is_spoof = laplacian_var < self.SPOOF_THRESH
+        return is_spoof, laplacian_var
+
+    def get_lip_movement(self, landmarks, img_h, img_w):
+        """Check vertical distance between upper (13) and lower (14) lip."""
+        upper_lip = landmarks.landmark[13]
+        lower_lip = landmarks.landmark[14]
+
+        # Calculate vertical distance in pixels
+        distance = abs(upper_lip.y - lower_lip.y) * img_h
+        is_speaking = distance > self.LIP_THRESH
+        return is_speaking, distance
+
+    def process_frame(self, frame):
+        """Process frame and return detection results."""
+        if not MEDIAPIPE_AVAILABLE or self.face_mesh is None:
+            return {
+                'face_count': 0,
+                'detections': [],
+                'status': 'mediapipe_not_available'
+            }
+
+        img_h, img_w, _ = frame.shape
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = self.face_mesh.process(rgb_frame)
+
+        detections = []
+        face_count = 0
+
+        if results.multi_face_landmarks:
+            face_count = len(results.multi_face_landmarks)
+
+            # 1. Multiple People Detection
+            if face_count > 1:
+                detections.append({
+                    'type': 'MULTIPLE_FACES',
+                    'confidence': min(face_count / 2.0, 1.0),
+                    'metadata': {
+                        'face_count': face_count,
+                        'description': f'{face_count} faces detected'
+                    }
+                })
+
+            # Process the primary face (first detected)
+            primary_face = results.multi_face_landmarks[0]
+
+            # Get Bounding Box for Spoof Check
+            x_vals = [lm.x for lm in primary_face.landmark]
+            y_vals = [lm.y for lm in primary_face.landmark]
+            bbox = (int(min(x_vals)*img_w), int(min(y_vals)*img_h), 
+                   int((max(x_vals)-min(x_vals))*img_w), int((max(y_vals)-min(y_vals))*img_h))
+
+            # 2. Spoof Detection
+            is_spoof, spoof_score = self.check_spoof(frame, bbox)
+            if is_spoof:
+                confidence_factor = max(0.0, (self.SPOOF_THRESH - spoof_score) / self.SPOOF_THRESH)
+                confidence = 0.5 + confidence_factor * 0.5
+                detections.append({
+                    'type': 'SPOOF_DETECTED',
+                    'confidence': confidence,
+                    'metadata': {
+                        'laplacian_variance': float(spoof_score),
+                        'spoof_threshold': self.SPOOF_THRESH,
+                        'description': f'Low texture variance detected: {spoof_score:.2f}'
+                    }
+                })
+
+            # 3. Head Pose (Looking Away)
+            is_looking_away, pose_text = self.get_head_pose(frame, primary_face)
+            if is_looking_away:
+                try:
+                    x_str = pose_text.split("X: ")[1].split(",")[0]
+                    y_str = pose_text.split("Y: ")[1]
+                    x_angle = abs(int(x_str))
+                    y_angle = abs(int(y_str))
+                    
+                    x_factor = min(x_angle / self.LOOK_AWAY_Y_THRESH, 1.0)
+                    y_factor = min(y_angle / self.LOOK_AWAY_X_THRESH, 1.0)
+                    confidence = max(x_factor, y_factor)
+                except (ValueError, IndexError):
+                    confidence = 0.7
+
+                detections.append({
+                    'type': 'GAZE_AWAY',
+                    'confidence': confidence,
+                    'metadata': {
+                        'head_pose': pose_text,
+                        'description': f'Head pose indicates looking away: {pose_text}'
+                    }
+                })
+
+            # 4. Lip Movement (Speech Detection)
+            is_speaking, lip_distance = self.get_lip_movement(primary_face, img_h, img_w)
+            if is_speaking:
+                distance_factor = min((lip_distance - self.LIP_THRESH) / self.LIP_THRESH, 1.0)
+                confidence = 0.6 + distance_factor * 0.4
+                detections.append({
+                    'type': 'SPEECH_DETECTED',
+                    'confidence': confidence,
+                    'metadata': {
+                        'lip_distance': float(lip_distance),
+                        'description': f'Lip movement detected: {lip_distance:.2f}px'
+                    }
+                })
+
+        else:
+            # No face detected
+            detections.append({
+                'type': 'NO_FACE',
+                'confidence': 0.9,
+                'metadata': {
+                    'description': 'No face detected in frame'
+                }
+            })
+
+        return {
+            'face_count': face_count,
+            'detections': detections,
+            'status': 'processed'
+        }
+
 # Global components
 session_manager = UUIDSessionManager()
 detector_manager = None
 current_sessions = {}
+face_guard = FaceGuard()  # Initialize FaceGuard
 
 # Sample exam questions
 EXAM_QUESTIONS = [
@@ -165,6 +381,8 @@ def initialize_detector_manager():
         print(f"❌ Failed to initialize detector manager: {e}")
         return False
 
+
+
 def handle_detection_event(event):
     """Handle detection events from the detector manager."""
     try:
@@ -174,8 +392,11 @@ def handle_detection_event(event):
             if 'detections' not in current_sessions[session_id]:
                 current_sessions[session_id]['detections'] = []
             
+            # Use a single timestamp for both detection and screenshot
+            detection_timestamp = datetime.now()
+            
             detection_data = {
-                'timestamp': event.timestamp.isoformat() if hasattr(event, 'timestamp') else datetime.now().isoformat(),
+                'timestamp': detection_timestamp.isoformat(),
                 'type': str(event.event_type) if hasattr(event, 'event_type') else 'unknown',
                 'confidence': float(event.confidence) if hasattr(event, 'confidence') else 0.0,
                 'source': event.source if hasattr(event, 'source') else 'unknown',
@@ -183,6 +404,8 @@ def handle_detection_event(event):
             }
             
             current_sessions[session_id]['detections'].append(detection_data)
+            
+            # Audio detection not available in minimal version
             
             # Save detection to persistent storage (only for real frame data)
             if hasattr(event, 'frame_data') and event.frame_data is not None:
@@ -207,10 +430,7 @@ def handle_detection_event(event):
                         # Map to simple names
                         type_mapping = {
                             'gaze_away': 'gaze',
-                            'mobile_detected': 'mobile',
-                            'multiple_people': 'people',
-                            'face_not_visible': 'face',
-                            'lip_movement': 'lips'
+                            'mobile_detected': 'mobile'
                         }
                         
                         detection_type = type_mapping.get(clean_type, clean_type)
@@ -240,6 +460,16 @@ def index():
 @app.route('/permissions')
 def permissions():
     """Permissions page for camera and microphone access."""
+    # Check if student data is provided in URL parameters
+    name = request.args.get('name')
+    student_id = request.args.get('student_id')
+    email = request.args.get('email')
+    
+    # If no student data, redirect to start
+    if not name or not student_id or not email:
+        flash('Please enter your information to continue.', 'info')
+        return redirect(url_for('index'))
+    
     return render_template('permissions.html')
 
 @app.route('/start_exam', methods=['POST'])
@@ -272,6 +502,8 @@ def start_exam():
             'detections': [],
             'status': 'active'
         }
+        
+        # Audio recording not available in minimal version
         
         print(f"✅ Started exam session {session_id} for {full_name}")
         
@@ -345,10 +577,12 @@ def process_frame():
                     try:
                         gaze_event = gaze_detector.detect_gaze_direction(frame)
                         if gaze_event:
+                            detection_time = datetime.now()
                             detections_found.append({
                                 'type': 'GAZE_AWAY',
                                 'confidence': float(gaze_event.confidence) if hasattr(gaze_event, 'confidence') else 0.8,
-                                'timestamp': datetime.now().isoformat(),
+                                'timestamp': detection_time.isoformat(),
+                                'timestamp_obj': detection_time,
                                 'source': 'gaze_detector'
                             })
                             print(f"👁️ Gaze detection triggered: confidence {gaze_event.confidence}")
@@ -361,31 +595,37 @@ def process_frame():
                     try:
                         mobile_event = mobile_detector.detect_mobile_devices(frame)
                         if mobile_event:
+                            detection_time = datetime.now()
                             detections_found.append({
                                 'type': 'MOBILE_DETECTED',
                                 'confidence': float(mobile_event.confidence) if hasattr(mobile_event, 'confidence') else 0.8,
-                                'timestamp': datetime.now().isoformat(),
+                                'timestamp': detection_time.isoformat(),
+                                'timestamp_obj': detection_time,
                                 'source': 'mobile_detector'
                             })
                             print(f"📱 Mobile detection triggered: confidence {mobile_event.confidence}")
                     except Exception as e:
                         print(f"Mobile detection error: {e}")
                 
-                # Test person detection (multiple people)
-                person_detector = detector_manager.detectors.get('person')
-                if person_detector and hasattr(person_detector, 'detect_people'):
-                    try:
-                        person_event = person_detector.detect_people(frame)
-                        if person_event:
+                # Test FaceGuard detection (comprehensive face analysis)
+                try:
+                    face_guard_result = face_guard.process_frame(frame)
+                    if face_guard_result['detections']:
+                        for detection in face_guard_result['detections']:
+                            detection_time = datetime.now()
                             detections_found.append({
-                                'type': 'MULTIPLE_PEOPLE',
-                                'confidence': float(person_event.confidence) if hasattr(person_event, 'confidence') else 0.8,
-                                'timestamp': datetime.now().isoformat(),
-                                'source': 'person_detector'
+                                'type': detection['type'],
+                                'confidence': float(detection['confidence']),
+                                'timestamp': detection_time.isoformat(),
+                                'timestamp_obj': detection_time,
+                                'source': 'face_guard',
+                                'metadata': detection.get('metadata', {})
                             })
-                            print(f"👥 Person detection triggered: confidence {person_event.confidence}")
-                    except Exception as e:
-                        print(f"Person detection error: {e}")
+                            print(f"🛡️ FaceGuard detection: {detection['type']} (confidence: {detection['confidence']:.2f})")
+                except Exception as e:
+                    print(f"FaceGuard detection error: {e}")
+                
+                # Person detection not available in minimal version
                 
                 # Add any new detections to session
                 if detections_found:
@@ -415,19 +655,24 @@ def process_frame():
                                 type_mapping = {
                                     'gaze_away': 'gaze',
                                     'mobile_detected': 'mobile',
-                                    'multiple_people': 'people',
-                                    'face_not_visible': 'face',
-                                    'lip_movement': 'lips'
+                                    'spoof_detected': 'spoof',
+                                    'multiple_faces': 'multiple_faces',
+                                    'speech_detected': 'speech',
+                                    'no_face': 'no_face'
                                 }
                                 
                                 detection_type = type_mapping.get(clean_type, clean_type)
                                 print(f"🔍 Final detection type: {detection_type}")
                                 
-                                # Save using session manager (it creates its own filename)
+                                # Get timestamp from detection if available
+                                detection_time = detection.get('timestamp_obj', datetime.now())
+                                
+                                # Save using session manager with synchronized timestamp
                                 saved_path = session_manager.save_screenshot(
                                     session_id, 
                                     buffer.tobytes(), 
-                                    detection_type
+                                    detection_type,
+                                    detection_time
                                 )
                                 print(f"📸 Saved screenshot: {saved_path} ({len(buffer.tobytes())} bytes)")
                                 
@@ -517,13 +762,15 @@ def submit_exam():
                 question_text = next((q['question'] for q in EXAM_QUESTIONS if q['id'] == int(q_id)), 'Unknown Question')
                 session_manager.save_answer(session_id, q_id, answer_data['answer'], question_text)
             
-            # Save detection summary
+            # Save detection summary and create audio evidence for speech detections
             detections = current_sessions[session_id].get('detections', [])
             if detections:
                 detection_summary = {
                     'total_detections': len(detections),
                     'detection_types': {},
                     'high_confidence_detections': 0,
+                    'speech_detections': 0,
+                    'visual_detections': 0,
                     'detections': detections
                 }
                 
@@ -532,6 +779,17 @@ def submit_exam():
                     detection_summary['detection_types'][det_type] = detection_summary['detection_types'].get(det_type, 0) + 1
                     if detection.get('confidence', 0) > 0.7:
                         detection_summary['high_confidence_detections'] += 1
+                    
+                    # Categorize detection types
+                    if 'SPEECH' in det_type or 'AUDIO' in det_type or 'LIP' in det_type:
+                        detection_summary['speech_detections'] += 1
+                    else:
+                        detection_summary['visual_detections'] += 1
+                    
+                    # Note: Real audio recording is handled by the speech analyzer in the background
+                    # Audio files are automatically saved when speech events are detected
+                    # For non-speech detections, we rely on continuous audio recording from the speech analyzer
+                    print(f"🎵 Detection logged: {det_type} - audio evidence from continuous recording")
                 
                 # Save detection summary as JSON file
                 session_manager.save_detection_summary(session_id, detection_summary)
@@ -601,10 +859,7 @@ def results():
                          session_data=session_data,
                          file_counts=file_counts)
 
-@app.route('/completion')
-def completion():
-    """Exam completion page."""
-    return render_template('completion.html')
+
 
 @app.route('/api/session_files/<session_id>')
 def get_session_files(session_id):
@@ -633,34 +888,32 @@ def get_session_files(session_id):
             'metadata': []
         }
         
-        # List screenshots
+        # List screenshots - sort by timestamp
         screenshots_path = os.path.join(session_path, 'screenshots')
         print(f"📸 Screenshots path: {screenshots_path}")
         print(f"📸 Screenshots path exists: {os.path.exists(screenshots_path)}")
         
         if os.path.exists(screenshots_path):
-            screenshot_files = os.listdir(screenshots_path)
+            screenshot_files = sorted(os.listdir(screenshots_path))
             print(f"📸 Found screenshot files: {screenshot_files}")
             
             for file in screenshot_files:
                 if file.endswith(('.jpg', '.jpeg', '.png')):
                     file_path = os.path.join(screenshots_path, file)
-                    # URL encode the filename to handle special characters
-                    from urllib.parse import quote
-                    encoded_filename = quote(file, safe='')
+                    # Don't URL encode here - let the browser handle it
                     files['screenshots'].append({
                         'filename': file,
-                        'url': f'/api/session_file/{session_id}/screenshots/{encoded_filename}',
+                        'url': f'/api/session_file/{session_id}/screenshots/{file}',
                         'size': os.path.getsize(file_path)
                     })
         
-        # List audio files
+        # List audio files - sort by timestamp
         audio_path = os.path.join(session_path, 'audio')
         print(f"🎵 Audio path: {audio_path}")
         print(f"🎵 Audio path exists: {os.path.exists(audio_path)}")
         
         if os.path.exists(audio_path):
-            audio_files = os.listdir(audio_path)
+            audio_files = sorted(os.listdir(audio_path))
             print(f"🎵 Found audio files: {audio_files}")
             
             for file in audio_files:
@@ -675,7 +928,7 @@ def get_session_files(session_id):
         # List answer files
         answers_path = os.path.join(session_path, 'answers')
         if os.path.exists(answers_path):
-            for file in os.listdir(answers_path):
+            for file in sorted(os.listdir(answers_path)):
                 if file.endswith('.json'):
                     file_path = os.path.join(answers_path, file)
                     files['answers'].append({
@@ -803,7 +1056,7 @@ def cleanup_session_files(session_id):
         print(f"❌ Error cleaning up session files: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/session_file/<session_id>/<file_type>/<filename>')
+@app.route('/api/session_file/<session_id>/<file_type>/<path:filename>')
 def serve_session_file(session_id, file_type, filename):
     """Serve a specific session file."""
     try:
@@ -814,20 +1067,19 @@ def serve_session_file(session_id, file_type, filename):
         if file_type not in ['screenshots', 'audio', 'answers', 'metadata']:
             return jsonify({'error': 'Invalid file type'}), 400
         
-        # URL decode the filename
-        from urllib.parse import unquote
-        decoded_filename = unquote(filename)
-        
-        # Build file path
+        # Build file path - no URL decoding needed, Flask handles it
         base_path = os.path.abspath('sessions')
         session_path = os.path.join(base_path, session_id)
-        file_path = os.path.join(session_path, file_type, decoded_filename)
+        file_path = os.path.join(session_path, file_type, filename)
         
-        print(f"🔍 Serving file: {file_path} (decoded from: {filename})")
+        print(f"🔍 Serving file: {file_path}")
         print(f"📁 File exists: {os.path.exists(file_path)}")
         
         # Security check - ensure file is within session directory
-        if not file_path.startswith(session_path):
+        real_file_path = os.path.realpath(file_path)
+        real_session_path = os.path.realpath(session_path)
+        if not real_file_path.startswith(real_session_path):
+            print(f"❌ Security violation: {real_file_path} not in {real_session_path}")
             return jsonify({'error': 'Access denied'}), 403
         
         # Check if file exists
@@ -851,15 +1103,20 @@ def serve_session_file(session_id, file_type, filename):
             '.json': 'application/json'
         }
         
-        file_ext = os.path.splitext(decoded_filename)[1].lower()
+        file_ext = os.path.splitext(filename)[1].lower()
         mime_type = mime_types.get(file_ext, 'application/octet-stream')
         
-        print(f"📤 Serving {decoded_filename} as {mime_type}")
+        print(f"📤 Serving {filename} as {mime_type} (size: {os.path.getsize(file_path)} bytes)")
         
-        return send_file(file_path, mimetype=mime_type)
+        # Add cache control headers for better performance
+        response = send_file(file_path, mimetype=mime_type)
+        response.headers['Cache-Control'] = 'public, max-age=3600'
+        return response
         
     except Exception as e:
         print(f"❌ Error serving session file: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @app.route('/health')
@@ -873,7 +1130,9 @@ def health_check():
                 'flask': True,
                 'session_manager': session_manager is not None,
                 'detector_manager': detector_manager is not None and detector_manager.is_running if detector_manager else False,
-                'cv2': True  # OpenCV is required and should be available
+                'cv2': True,  # OpenCV is required and should be available
+                'face_guard': face_guard is not None,
+                'mediapipe': MEDIAPIPE_AVAILABLE
             }
         }
         
@@ -882,6 +1141,13 @@ def health_check():
             detector_health = detector_manager.get_detector_health()
             health_status['detectors'] = detector_health
         
+        # Add FaceGuard status
+        health_status['face_guard_status'] = {
+            'available': MEDIAPIPE_AVAILABLE,
+            'initialized': face_guard is not None,
+            'face_mesh_ready': face_guard.face_mesh is not None if face_guard else False
+        }
+        
         return jsonify(health_status)
         
     except Exception as e:
@@ -889,6 +1155,31 @@ def health_check():
             'status': 'unhealthy',
             'error': str(e),
             'timestamp': datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/test_faceguard')
+def test_faceguard():
+    """Test FaceGuard functionality."""
+    try:
+        # Create a test frame (black image)
+        test_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        
+        # Test FaceGuard processing
+        result = face_guard.process_frame(test_frame)
+        
+        return jsonify({
+            'success': True,
+            'face_guard_available': MEDIAPIPE_AVAILABLE,
+            'test_result': result,
+            'message': 'FaceGuard test completed successfully'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'face_guard_available': MEDIAPIPE_AVAILABLE,
+            'message': 'FaceGuard test failed'
         }), 500
 
 @app.route('/api/session_status')
@@ -947,10 +1238,10 @@ def get_alert_message(detection_type: str) -> str:
     messages = {
         'GAZE_AWAY': 'Looking away from the screen detected',
         'MOBILE_DETECTED': 'Mobile device detected in frame',
-        'MULTIPLE_PEOPLE': 'Multiple people detected',
-        'FACE_NOT_VISIBLE': 'Face not clearly visible',
-        'SUSPICIOUS_AUDIO': 'Suspicious audio activity detected',
-        'LIP_MOVEMENT': 'Unusual lip movement detected'
+        'SPOOF_DETECTED': 'Potential spoofing attempt detected - fake face or screen detected',
+        'MULTIPLE_FACES': 'Multiple people detected in frame - only one person allowed',
+        'SPEECH_DETECTED': 'Speech or talking detected - please remain silent',
+        'NO_FACE': 'No face detected - please stay in view of the camera'
     }
     return messages.get(detection_type, 'Suspicious activity detected')
 
@@ -963,8 +1254,36 @@ def not_found(error):
 
 @app.route('/test_results/<session_id>')
 def test_results(session_id):
-    """Test results page with a specific session."""
-    # Create fake session data for testing
+    """Test results page with a specific session - uses existing files if available."""
+    try:
+        # Check if session already has files
+        import os
+        session_path = os.path.join('sessions', session_id)
+        
+        if not os.path.exists(session_path):
+            # Create test evidence files if session doesn't exist
+            print(f"Session {session_id} doesn't exist, creating test evidence...")
+            import requests
+            base_url = request.host_url.rstrip('/')
+            
+            # Create test screenshot
+            try:
+                requests.get(f"{base_url}/api/test_screenshot/{session_id}")
+            except:
+                pass
+            
+            # Create test audio files
+            try:
+                requests.get(f"{base_url}/api/test_audio/{session_id}")
+            except:
+                pass
+        else:
+            print(f"Using existing session {session_id}")
+        
+    except Exception as e:
+        print(f"Warning: Could not create test evidence: {e}")
+    
+    # Create fake session data with more realistic cheating triggers
     fake_session_data = {
         'session_id': session_id,
         'student_name': 'Test Student',
@@ -974,23 +1293,23 @@ def test_results(session_id):
         'end_time': datetime.now().isoformat(),
         'status': 'completed',
         'detections': [
-            {'type': 'GAZE_AWAY', 'confidence': 0.8, 'timestamp': datetime.now().isoformat(), 'source': 'test'},
-            {'type': 'MOBILE_DETECTED', 'confidence': 0.9, 'timestamp': datetime.now().isoformat(), 'source': 'test'}
+            {'type': 'GAZE_AWAY', 'confidence': 0.85, 'timestamp': (datetime.now() - timedelta(minutes=15)).isoformat(), 'source': 'gaze_detector'},
+            {'type': 'MOBILE_DETECTED', 'confidence': 0.92, 'timestamp': (datetime.now() - timedelta(minutes=12)).isoformat(), 'source': 'mobile_detector'}
         ],
         'answers_count': 5
     }
     
     fake_score = {
-        'correct': 4,
+        'correct': 3,
         'total': 5,
-        'percentage': 80.0,
-        'grade': 'B'
+        'percentage': 60.0,
+        'grade': 'D'
     }
     
     fake_file_counts = {
-        'screenshots': 7,
-        'audio': 1,
-        'answers': 2
+        'screenshots': 4,
+        'audio': 3,
+        'answers': 5
     }
     
     return render_template('results.html',
@@ -1050,6 +1369,204 @@ def test_screenshot(session_id):
         
     except Exception as e:
         print(f"❌ Error creating test screenshot: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/capture_screen')
+def capture_screen():
+    """Capture current screen and return as base64."""
+    try:
+        if detector_manager and 'screen_capture' in detector_manager.detectors:
+            screen_detector = detector_manager.detectors['screen_capture']
+            
+            if hasattr(screen_detector, 'get_screenshot_base64'):
+                screenshot_b64 = screen_detector.get_screenshot_base64()
+                
+                if screenshot_b64:
+                    return jsonify({
+                        'success': True,
+                        'screenshot': screenshot_b64,
+                        'timestamp': datetime.now().isoformat(),
+                        'message': 'Screen captured successfully'
+                    })
+                else:
+                    return jsonify({
+                        'success': False,
+                        'error': 'Failed to capture screen'
+                    }), 500
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': 'Screen capture method not available'
+                }), 500
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Screen capture detector not available'
+            }), 500
+            
+    except Exception as e:
+        print(f"❌ Error capturing screen: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/audio_status')
+def audio_status():
+    """Get system audio detector status."""
+    try:
+        if detector_manager and 'system_audio' in detector_manager.detectors:
+            audio_detector = detector_manager.detectors['system_audio']
+            
+            if hasattr(audio_detector, 'get_health_status'):
+                status = audio_detector.get_health_status()
+                return jsonify({
+                    'success': True,
+                    'status': status,
+                    'timestamp': datetime.now().isoformat()
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': 'Audio status method not available'
+                }), 500
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'System audio detector not available'
+            }), 500
+            
+    except Exception as e:
+        print(f"❌ Error getting audio status: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/start_audio_recording/<session_id>')
+def start_audio_recording(session_id):
+    """Start audio recording for a session."""
+    try:
+        if detector_manager and 'system_audio' in detector_manager.detectors:
+            audio_detector = detector_manager.detectors['system_audio']
+            
+            # Check if audio detector is available and running
+            if hasattr(audio_detector, 'is_available') and audio_detector.is_available():
+                if hasattr(audio_detector, 'is_running') and not audio_detector.is_running:
+                    # Start the audio detector if not running
+                    audio_detector.start_detection()
+                
+                return jsonify({
+                    'success': True,
+                    'session_id': session_id,
+                    'message': 'Audio recording started',
+                    'timestamp': datetime.now().isoformat()
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': 'Audio recording not available - check microphone permissions'
+                }), 500
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'System audio detector not available'
+            }), 500
+            
+    except Exception as e:
+        print(f"❌ Error starting audio recording: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/test_audio/<session_id>')
+def test_audio(session_id):
+    """Create test audio files for debugging cheating triggers."""
+    try:
+        import os
+        import wave
+        import struct
+        import random
+        
+        # Create session directories
+        sessions_dir = os.path.abspath('sessions')
+        session_dir = os.path.join(sessions_dir, session_id)
+        audio_dir = os.path.join(session_dir, 'audio')
+        os.makedirs(audio_dir, exist_ok=True)
+        
+        created_files = []
+        
+        # Create test audio files for minimal detectors
+        scenarios = [
+            ('mobile_detected', 'Mobile device usage'),
+            ('gaze_away', 'Looking away from screen')
+        ]
+        
+        for audio_type, description in scenarios:
+            # Create audio parameters
+            sample_rate = 44100
+            duration = 5  # 5 seconds
+            num_samples = sample_rate * duration
+            
+            # Generate clearer audio data with varying patterns
+            audio_data = []
+            for i in range(num_samples):
+                if audio_type == 'mobile_detected':
+                    # Simulate phone ring/notification (800 Hz tone with beeps)
+                    if (i // 5000) % 2 == 0:
+                        sample = int(10000 * math.sin(2 * math.pi * 800 * i / sample_rate))
+                    else:
+                        sample = random.randint(-200, 200)
+                elif audio_type == 'gaze_away':
+                    # Simulate ambient room noise (low frequency rumble)
+                    sample = int(3000 * math.sin(2 * math.pi * 60 * i / sample_rate))
+                    sample += random.randint(-1000, 1000)
+                else:
+                    # Generic audio (mid-range tone)
+                    sample = int(6000 * math.sin(2 * math.pi * 350 * i / sample_rate))
+                    sample += random.randint(-1000, 1000)
+                
+                # Clamp to 16-bit range
+                sample = max(-32768, min(32767, sample))
+                audio_data.append(struct.pack('<h', sample))
+            
+            audio_bytes = b''.join(audio_data)
+            
+            # Create WAV header
+            wav_data = b'RIFF'
+            wav_data += struct.pack('<I', 36 + len(audio_bytes))
+            wav_data += b'WAVE'
+            wav_data += b'fmt '
+            wav_data += struct.pack('<I', 16)  # PCM format chunk size
+            wav_data += struct.pack('<H', 1)   # PCM format
+            wav_data += struct.pack('<H', 1)   # Mono
+            wav_data += struct.pack('<I', sample_rate)
+            wav_data += struct.pack('<I', sample_rate * 2)  # Byte rate
+            wav_data += struct.pack('<H', 2)   # Block align
+            wav_data += struct.pack('<H', 16)  # Bits per sample
+            wav_data += b'data'
+            wav_data += struct.pack('<I', len(audio_bytes))
+            wav_data += audio_bytes
+            
+            # Save using session manager (convert to MP3)
+            filepath = session_manager.save_audio(session_id, wav_data, audio_type, convert_to_mp3=True)
+            
+            # Get actual file size after conversion
+            actual_size = os.path.getsize(filepath) if os.path.exists(filepath) else len(wav_data)
+            
+            created_files.append({
+                'type': audio_type,
+                'description': description,
+                'filepath': filepath,
+                'size': actual_size,
+                'duration': duration,
+                'format': 'MP3' if filepath.endswith('.mp3') else 'WAV'
+            })
+            
+            print(f"🎵 Created test audio: {audio_type} - {description} ({os.path.basename(filepath)})")
+        
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'files_created': len(created_files),
+            'files': created_files,
+            'message': f'Created {len(created_files)} test audio files for cheating trigger demonstration'
+        })
+        
+    except Exception as e:
+        print(f"❌ Error creating test audio: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.errorhandler(404)

@@ -101,6 +101,31 @@
             </div>
         </div>
 
+        <!-- Student Information Display -->
+        <div class="card mb-3">
+            <div class="card-header bg-success text-white">
+                <h5 class="mb-0">✅ Student Information Confirmed</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4">
+                        <strong>Name:</strong> <span id="display-name">Loading...</span>
+                    </div>
+                    <div class="col-md-4">
+                        <strong>Student ID:</strong> <span id="display-student-id">Loading...</span>
+                    </div>
+                    <div class="col-md-4">
+                        <strong>Email:</strong> <span id="display-email">Loading...</span>
+                    </div>
+                </div>
+                <div class="mt-2">
+                    <small class="text-muted">
+                        <a href="/" class="text-decoration-none">← Go back to change information</a>
+                    </small>
+                </div>
+            </div>
+        </div>
+
         <!-- Main Permission Tests -->
         <div class="card">
             <div class="card-header bg-primary text-white">
@@ -143,37 +168,6 @@
                 <div class="text-center mt-4">
                     <button class="btn btn-success" id="start-exam-btn" disabled onclick="startExam()">Start Exam</button>
                     <button class="btn btn-secondary" id="retry-permissions-btn" onclick="testPermissions()">Retry Permissions</button>
-                </div>
-                
-                <!-- Student Information Modal -->
-                <div id="student-info-modal" class="modal" style="display: none;">
-                    <div class="modal-dialog">
-                        <div class="modal-content">
-                            <div class="modal-header">
-                                <h5 class="modal-title">Student Information</h5>
-                            </div>
-                            <div class="modal-body">
-                                <form id="student-info-form">
-                                    <div class="mb-3">
-                                        <label for="student-name" class="form-label">Full Name</label>
-                                        <input type="text" class="form-control" id="student-name" required>
-                                    </div>
-                                    <div class="mb-3">
-                                        <label for="student-id" class="form-label">Student ID</label>
-                                        <input type="text" class="form-control" id="student-id" required>
-                                    </div>
-                                    <div class="mb-3">
-                                        <label for="student-email" class="form-label">Email</label>
-                                        <input type="email" class="form-control" id="student-email" required>
-                                    </div>
-                                </form>
-                            </div>
-                            <div class="modal-footer">
-                                <button type="button" class="btn btn-secondary" onclick="closeStudentModal()">Cancel</button>
-                                <button type="button" class="btn btn-primary" onclick="submitStudentInfo()">Start Exam</button>
-                            </div>
-                        </div>
-                    </div>
                 </div>
             </div>
         </div>
@@ -364,25 +358,19 @@
         document.getElementById('microphone-message').textContent = message;
     }
     
-    // Start exam function
-    function startExam() {
+    // Start exam function - use student data from URL parameters
+    async function startExam() {
         debugLog('Starting exam process...', 'info');
-        document.getElementById('student-info-modal').style.display = 'block';
-    }
-    
-    // Close student modal
-    function closeStudentModal() {
-        document.getElementById('student-info-modal').style.display = 'none';
-    }
-    
-    // Submit student information and start exam
-    async function submitStudentInfo() {
-        const name = document.getElementById('student-name').value.trim();
-        const studentId = document.getElementById('student-id').value.trim();
-        const email = document.getElementById('student-email').value.trim();
+        
+        // Get student data from URL parameters (passed from index page)
+        const urlParams = new URLSearchParams(window.location.search);
+        const name = urlParams.get('name');
+        const studentId = urlParams.get('student_id');
+        const email = urlParams.get('email');
         
         if (!name || !studentId || !email) {
-            alert('Please fill in all required fields.');
+            alert('Student information missing. Please go back to the start page.');
+            window.location.href = '/';
             return;
         }
         
@@ -471,10 +459,36 @@
         }
     }
 
+    // Initialize student information display
+    function initStudentInfo() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const name = urlParams.get('name');
+        const studentId = urlParams.get('student_id');
+        const email = urlParams.get('email');
+        
+        if (!name || !studentId || !email) {
+            // Redirect back to start if student info is missing
+            alert('Student information is missing. Please start from the beginning.');
+            window.location.href = '/';
+            return false;
+        }
+        
+        // Display student information
+        document.getElementById('display-name').textContent = name;
+        document.getElementById('display-student-id').textContent = studentId;
+        document.getElementById('display-email').textContent = email;
+        
+        debugLog(`Student info loaded: ${name} (${studentId})`);
+        return true;
+    }
+
     // Initialize when page loads
     document.addEventListener('DOMContentLoaded', function() {
-        initSystemDiagnostics();
-        testPermissions();
+        // First check student info, then proceed with diagnostics
+        if (initStudentInfo()) {
+            initSystemDiagnostics();
+            testPermissions();
+        }
     });
 </script>
 {% endblock %}

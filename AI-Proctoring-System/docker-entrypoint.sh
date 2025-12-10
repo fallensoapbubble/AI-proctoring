@@ -57,7 +57,7 @@ import sys
 print(f'Python version: {sys.version.split()[0]}')
 
 # Quick package availability check
-packages = ['cv2', 'torch', 'flask', 'numpy']
+packages = ['cv2', 'torch', 'flask', 'numpy', 'speech_recognition', 'pyaudio']
 for pkg in packages:
     try:
         __import__(pkg)
@@ -75,7 +75,25 @@ print('✓ OpenCV basic operations working')
 # Test PyTorch
 import torch
 print(f'✓ PyTorch device: {torch.device(\"cpu\")}')
+
+# Test audio availability
+try:
+    import pyaudio
+    p = pyaudio.PyAudio()
+    device_count = p.get_device_count()
+    print(f'✓ Audio: {device_count} devices found')
+    p.terminate()
+except Exception as e:
+    print(f'⚠ Audio: {str(e)[:50]}...')
 "
+
+# Test audio devices if available
+log "🎤 Checking audio system..."
+if command -v aplay >/dev/null 2>&1; then
+    aplay -l 2>/dev/null | head -5 || log "⚠️ No ALSA devices found"
+else
+    log "⚠️ ALSA tools not available"
+fi
 
 log "✅ Environment setup complete. Starting application..."
 
