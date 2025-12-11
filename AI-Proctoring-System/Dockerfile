@@ -61,8 +61,7 @@ RUN mkdir -p evidence/screenshots evidence/metadata \
 COPY --chown=appuser:appuser . .
 
 # Set up entrypoint
-RUN chmod +x docker-entrypoint.sh
-
+RUN sed -i 's/\r$//' docker-entrypoint.sh && chmod +x docker-entrypoint.sh
 # Switch to non-root user for security
 USER appuser
 
