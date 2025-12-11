@@ -22,6 +22,7 @@
                 <div class="metrics-card">Accuracy: <strong>{{ stats.accuracy }}%</strong></div>
                 <div class="metrics-card text-success">TP: {{ stats.tp }} | TN: {{ stats.tn }}</div>
                 <div class="metrics-card text-danger">FP: {{ stats.fp }} | FN: {{ stats.fn }}</div>
+                <a href="/analytics" class="btn btn-danger ms-3 btn-lg">🛑 End Test & View Analytics</a>
             </div>
         </div>
     </div>
@@ -56,19 +57,26 @@
                         </div>
 
                         <hr>
-                        <h5 class="text-center mb-3">Is the AI Correct?</h5>
-                        <div class="row g-2">
+                        <h5 class="text-center mb-3">Is the AI Correct? (Overall Verdict)</h5>
+                        <div class="row g-2 mb-4">
                             <div class="col-6">
                                 <button class="btn btn-outline-danger w-100 py-3" onclick="submitLabel('CHEATING')">
-                                    It is CHEATING ❌
+                                    Overall: It is **CHEATING** ❌
                                 </button>
                             </div>
                             <div class="col-6">
                                 <button class="btn btn-outline-success w-100 py-3" onclick="submitLabel('NORMAL')">
-                                    It is NORMAL ✅
+                                    Overall: It is **NORMAL** ✅
                                 </button>
                             </div>
                         </div>
+                        
+                        <hr>
+                        <h5 class="text-center mb-3 text-info">Human-in-the-Loop: Individual Labeling</h5>
+                        <p class="small text-muted text-center">For each detection, was it *truly* present in the image? (Required for detailed metrics)</p>
+
+                        <div id="individual-labels-form">
+                            </div>
                     </div>
                     
                     <div id="placeholder" class="text-center py-5 text-muted">
@@ -84,8 +92,47 @@
     const video = document.getElementById('webcam');
     const canvas = document.createElement('canvas');
     let currentResult = null;
+    // NOTE: This variable is passed from the Flask backend via Jinja template
+    const detectionLabels = {{ detection_labels | tojson }}; 
 
-    navigator.mediaDevices.getUserMedia({ video: true }).then(stream => video.srcObject = stream);
+    navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
+        video.srcObject = stream;
+        // Optionally adjust video size after metadata is loaded
+        video.onloadedmetadata = function(e) {
+             video.play();
+        };
+    }).catch(err => {
+         console.error("The following error occurred: " + err.name);
+         alert("Cannot access webcam: " + err.name);
+    });
+
+    function createLabelForm(detectionData) {
+        const formDiv = document.getElementById('individual-labels-form');
+        formDiv.innerHTML = ''; 
+        
+        let html = '';
+        detectionLabels.forEach(label => {
+            // Get AI confidence and display it
+            const conf = detectionData[label] !== undefined ? (detectionData[label] * 100).toFixed(0) : 0;
+            
+            html += `
+                <div class="row mb-2 align-items-center border-bottom pb-2">
+                    <div class="col-6">
+                        <strong>${label}</strong> <span class="badge bg-secondary">${conf}% AI Conf</span>
+                    </div>
+                    <div class="col-6 btn-group" data-label-id="${label}">
+                        <input type="radio" class="btn-check" name="human_label_${label}" id="${label}_1" value="1" autocomplete="off">
+                        <label class="btn btn-outline-danger btn-sm" for="${label}_1">YES</label>
+
+                        <input type="radio" class="btn-check" name="human_label_${label}" id="${label}_0" value="0" autocomplete="off">
+                        <label class="btn btn-outline-success btn-sm" for="${label}_0">NO</label>
+                    </div>
+                </div>
+            `;
+        });
+        formDiv.innerHTML = html;
+    }
+
 
     async function processFrame() {
         // UI Updates
@@ -96,16 +143,31 @@
         // Capture
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
-        canvas.getContext('2d').drawImage(video, 0, 0);
+        // Use scaleX(-1) to flip the image drawn on canvas to match the user's view (optional)
+        const context = canvas.getContext('2d');
+        context.translate(canvas.width, 0);
+        context.scale(-1, 1);
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        
         const imgData = canvas.toDataURL('image/jpeg', 0.8);
 
         // Send to Backend
-        const res = await fetch('/api/test/process', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ image: imgData })
-        });
-        currentResult = await res.json();
+        try {
+            const res = await fetch('/api/test/process', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ image: imgData })
+            });
+            currentResult = await res.json();
+            
+            if (currentResult.status === 'error') {
+                 alert("Backend Error: " + currentResult.message);
+                 return;
+            }
+        } catch(e) {
+             alert("Network Error: Could not connect to backend.");
+             return;
+        }
 
         // Update UI with Result
         document.getElementById('loading').classList.add('d-none');
@@ -118,30 +180,67 @@
         const snap = document.getElementById('snapshot');
         snap.src = currentResult.image_url;
         snap.style.display = 'block';
+        
+        // NEW: Populate the individual labeling form
+        createLabelForm(currentResult.detection_data);
 
         // Format details
         let detailsHtml = "<strong>Detections:</strong> ";
         if (currentResult.details.length === 0) detailsHtml += "None";
         else {
             currentResult.details.forEach(d => {
-                detailsHtml += `<span class="badge bg-secondary mx-1">${d.type} (${(d.confidence*100).toFixed(0)}%)</span>`;
+                // Ensure confidence is valid before calling toFixed
+                const confPercent = d.confidence && !isNaN(d.confidence) ? (d.confidence * 100).toFixed(0) : 'N/A';
+                detailsHtml += `<span class="badge bg-secondary mx-1">${d.type} (${confPercent}%)</span>`;
             });
         }
         document.getElementById('detection-details').innerHTML = detailsHtml;
     }
 
-    async function submitLabel(label) {
-        await fetch('/api/test/submit', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                ai_verdict: currentResult.verdict,
-                human_label: label,
-                filename: currentResult.filename,
-                details: currentResult.details
-            })
+    async function submitLabel(overall_label) {
+        // 1. Collect individual human labels from the form
+        const humanLabelData = {};
+        let allLabeled = true;
+        
+        detectionLabels.forEach(label => {
+            const checked = document.querySelector(`input[name="human_label_${label}"]:checked`);
+            if (!checked) {
+                // Must label ALL individual detections for accurate multi-label metrics
+                allLabeled = false;
+            } else {
+                humanLabelData[label] = checked.value;
+            }
         });
-        location.reload(); // Refresh to update stats
+
+        if (!allLabeled) {
+            alert("Please label ALL individual detections (YES/NO) before submitting the overall verdict.");
+            return;
+        }
+
+        if (!currentResult) {
+            alert("Please capture and analyze a frame first.");
+            return;
+        }
+
+        // 2. Submit data
+        try {
+            await fetch('/api/test/submit', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    ai_verdict: currentResult.verdict,
+                    human_label: overall_label, // This is the overall CHEATING/NORMAL label
+                    filename: currentResult.filename,
+                    details: currentResult.details,
+                    detection_data: currentResult.detection_data, // AI confidences
+                    human_label_data: humanLabelData // Individual human labels (1 or 0)
+                })
+            });
+            location.reload(); // Refresh to update stats
+        } catch(e) {
+            console.error("Submit Error:", e);
+            alert("Failed to submit label. Check console for details.");
+        }
     }
 </script>
 </body>
